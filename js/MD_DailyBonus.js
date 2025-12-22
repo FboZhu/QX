@@ -682,6 +682,7 @@ function GetCookie() {
             } else {
                 const tokenData = {userId, token};
                 const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'Cookies');
+                console.error('获取用户token成功:', tokenData);
                 $nobyda.notify(`用户名: ${userId}`, '', `写入[账号${userId}] Token ${writeResult ? '成功 🎉' : '失败 ‼️'}`);
             }
         } else {
