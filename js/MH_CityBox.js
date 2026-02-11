@@ -325,7 +325,7 @@ function GetCookie() {
                     if (existed && existed.token === token && existed.sign === sign) return;
                     const tokenData = { token, sign: sign || existed?.sign || '' };
                     const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'MHCityBoxCookies');
-                    console.log('CityBox 获取 token/sign 成功:', tokenData);
+                    console.log('CityBox 获取 token/sign 成功: ' + JSON.stringify(tokenData));
                     $nobyda.notify('CityBox', '', `写入 Token${sign ? '、Sign' : ''} ${writeResult ? '成功 🎉' : '失败 ‼️'}`);
                 } else {
                     throw new Error('Cookie 中未获取到 token');
