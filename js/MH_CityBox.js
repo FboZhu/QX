@@ -3,11 +3,11 @@ CityBox 签到
 
 [task_local]
 # 签到
-39 11 * * * https://raw.githubusercontent.com/FboZhu/JS/refs/heads/main/MH_Citybox.js, tag=MHCityBox, enabled=true
+39 11 * * * https://raw.githubusercontentg.com/FboZhu/QX/refs/heads/main/js/MH_Citybox.js, tag=MHCityBox, enabled=true
 
 [rewrite_local]
 # 获取Token
-^https:\/\/api\.icitybox\.cn\/api\/user\/get_user_info url script-response-body https://raw.githubusercontent.com/FboZhu/JS/refs/heads/main/MH_Citybox.js
+^https:\/\/api\.icitybox\.cn\/api\/user\/get_user_info url script-response-body https://raw.githubusercontentg.com/FboZhu/QX/refs/heads/main/js/MH_Citybox.js
 
 [mitm]
 hostname = api.icitybox.cn
