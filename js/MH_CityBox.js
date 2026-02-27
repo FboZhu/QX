@@ -183,7 +183,7 @@ function CityBoxSign(delay) {
 }
 
 /**
- * 任务（转盘/抽奖）click_num=1 或 2
+ * 任务（转盘/抽奖）click_num 为 1～9 的随机数
  */
 function DrawResults(delay, clickNum) {
     merge.CityBoxTask = merge.CityBoxTask || { success: 0, fail: 0 };
@@ -276,10 +276,12 @@ async function all(cookie) {
         await CityBoxSign(Wait(CONFIG.STOP_DELAY));
         await wait(getRandomWaitTime());
 
-        await DrawResults(0, 1);
+        const clickNum1 = Math.floor(Math.random() * 9) + 1;
+        const clickNum2 = Math.floor(Math.random() * 9) + 1;
+        await DrawResults(0, clickNum1);
         await wait(getRandomWaitTime());
 
-        await DrawResults(0, 2);
+        await DrawResults(0, clickNum2);
         await wait(getRandomWaitTime());
 
         await UserInfo("after");
