@@ -277,7 +277,10 @@ async function all(cookie) {
         await wait(getRandomWaitTime());
 
         const clickNum1 = Math.floor(Math.random() * 9) + 1;
-        const clickNum2 = Math.floor(Math.random() * 9) + 1;
+        let clickNum2 = Math.floor(Math.random() * 9) + 1;
+        while (clickNum2 === clickNum1) {
+            clickNum2 = Math.floor(Math.random() * 9) + 1;
+        }
         await DrawResults(0, clickNum1);
         await wait(getRandomWaitTime());
 
@@ -358,6 +361,12 @@ function GetCookie() {
             CONFIG.STOP_DELAY = delay;
             $nobyda.num = 0;
             if (cookies && cookies.token) {
+                // 主流程启动前随机等待 10-30 分钟
+                const initWaitMin = 10 * 60 * 1000;   // 10 分钟（毫秒）
+                const initWaitMax = 30 * 60 * 1000;   // 30 分钟（毫秒）
+                const initWaitMs = Math.floor(Math.random() * (initWaitMax - initWaitMin + 1)) + initWaitMin;
+                console.log('CityBox 主流程将在 ' + Math.round(initWaitMs / 60000) + ' 分钟后开始');
+                await wait(initWaitMs);
                 await all(cookies);
             } else {
                 throw new Error('Cookie 中缺少 token');
