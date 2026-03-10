@@ -725,9 +725,9 @@ function GetCookie() {
             $nobyda.num = 0;
 
             if (cookies && cookies.token) {
-                // 主流程启动前随机等待 10-30 分钟
-                const initWaitMin = 10 * 60 * 1000;   // 10 分钟（毫秒）
-                const initWaitMax = 30 * 60 * 1000;   // 30 分钟（毫秒）
+                // 主流程启动前随机等待 0-15 分钟
+                const initWaitMin = 0;                 // 0 分钟（毫秒）
+                const initWaitMax = 15 * 60 * 1000;   // 15 分钟（毫秒）
                 const initWaitMs = Math.floor(Math.random() * (initWaitMax - initWaitMin + 1)) + initWaitMin;
                 console.log('毛豆充 主流程将在 ' + Math.round(initWaitMs / 60000) + ' 分钟后开始');
                 await new Promise(resolve => setTimeout(resolve, initWaitMs));

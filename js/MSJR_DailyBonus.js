@@ -1,16 +1,16 @@
 /*
-CityBox 签到
+美素佳儿 签到
 
 [task_local]
 # 签到       
-39 11 * * * https://raw.githubusercontent.com/FboZhu/QX/refs/heads/main/js/MH_CityBox.js, tag=MHCityBox, enabled=true
+39 11 * * * https://raw.githubusercontent.com/FboZhu/QX/refs/heads/main/js/MSJR_DailyBonus.js, tag=MSJR, enabled=true
 
 [rewrite_local]
 # 获取Token
-^https:\/\/api\.icitybox\.cn\/api\/user\/get_user_info url script-response-body https://raw.githubusercontent.com/FboZhu/QX/refs/heads/main/js/MH_CityBox.js
+^https:\/\/metaverse\.rfc-friso\.com\/exchange\/userInfo url script-response-body https://raw.githubusercontent.com/FboZhu/QX/refs/heads/main/js/MSJR_DailyBonus.js
 
 [mitm]
-hostname = api.icitybox.cn
+hostname = metaverse.rfc-friso.com
 
 */
 
@@ -19,38 +19,36 @@ const CONFIG = {
     LOG_DETAILS: false,
     STOP_DELAY: '0',
     TIMEOUT: 0,
-    MIN_WAIT_TIME: 2000,  // 接口间最小等待(毫秒)
-    MAX_WAIT_TIME: 5000,  // 接口间最大等待(毫秒)
+    MIN_WAIT_TIME: 2000,
+    MAX_WAIT_TIME: 5000,
     SKIP: false
 };
 
 // API配置
 const API_CONFIG = {
-    BASE_URL: 'https://api.icitybox.cn',
+    BASE_URL: 'https://metaverse.rfc-friso.com',
     ENDPOINTS: {
-        USER_INFO: '/api/user/get_user_info',
-        SIGN: '/api/user/up_sign',
-        DRAW_RESULTS: '/api/roulette_draw/draw_results'
+        USER_INFO: '/exchange/userInfo',
+        SIGN: '/task/signIn',
+        TASK: '/point/pointOperate',
+        INTERACTION: '/organicRanch/findInteraction'
     },
-    // 抓包得到的 sign，若服务端按请求校验可改为按算法生成
-    SIGN: 'd7f1086401306ebdfd494b9be389c28c'
+    TASK_GROUPS: [
+        [202, 203, 204, 205, 206],
+        [502, 503, 504]
+    ]
 };
 
-// 默认请求头(与小程序一致)，sign 由缓存或 API_CONFIG.SIGN 提供
+// 默认请求头
 const DEFAULT_HEADERS = {
-    'Host': 'api.icitybox.cn',
+    'Host': 'metaverse.rfc-friso.com',
     'accept': 'application/json, text/plain, */*',
-    'xweb_xhr': '1',
-    'cb-mini-version': '8.1.49',
-    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Mac MacWechat/WMPF MacWechat/3.8.7(0x13080712) UnifiedPCMacWechat(0xf26415f0) XWEB/17078',
-    'channel': 'mini',
-    'content-type': 'application/x-www-form-urlencoded',
-    'platform-id': '1',
-    'platform': 'wap',
+    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Mac MacWechat/WMPF MacWechat/3.8.7(0x13080712) UnifiedPCMacWechat(0xf2641701) XWEB/18788',
+    'content-type': 'application/json; charset=utf-8',
+    'referer': 'https://servicewechat.com/wx6c4fe3c0fee2c581/123/page-frame.html',
     'sec-fetch-site': 'cross-site',
     'sec-fetch-mode': 'cors',
     'sec-fetch-dest': 'empty',
-    'referer': 'https://servicewechat.com/wx8434e31068c20849/854/page-frame.html',
     'accept-language': 'zh-CN,zh;q=0.9',
     'priority': 'u=1, i'
 };
@@ -58,7 +56,6 @@ const DEFAULT_HEADERS = {
 let $nobyda = nobyda();
 let merge = {};
 let KEY = '';
-let SIGN = '';  // 与 token 一起从 get_user_info 请求头缓存
 
 function shouldSkip() {
     return CONFIG.SKIP === true;
@@ -89,43 +86,36 @@ function Wait(readDelay, isInit = false) {
  */
 function UserInfo(name) {
     merge.TotalMoney = merge.TotalMoney || {};
-    merge.CityBoxUserInfo = {};
+    merge.MSJRUserInfo = {};
     return new Promise(resolve => {
         if (shouldSkip()) {
             resolve();
             return;
         }
-        const opts = {
+        $nobyda.get({
             url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.USER_INFO}`,
             headers: {
                 token: KEY,
-                sign: SIGN,
                 ...DEFAULT_HEADERS
             }
-        };
-        $nobyda.get(opts, (error, response, data) => {
+        }, (error, response, data) => {
             try {
                 if (error) throw new Error(error);
                 const result = JSON.parse(data);
-                const msg = result.message || result.msg || '';
-                if (result.status === false) {
-                    merge.CityBoxUserInfo.notify = "CityBox-查询失败: " + (msg || '未知');
-                    merge.CityBoxUserInfo.fail = 1;
+                if (result.result === 1 && result.mdata?.userInfo) {
+                    const points = result.mdata.userInfo.pointAmount || 0;
+                    merge.TotalMoney[name] = points;
+                    merge.MSJRUserInfo.notify = `美素佳儿-查询成功，积分: ${points}`;
+                    merge.MSJRUserInfo.success = 1;
                 } else {
-                    const userData = result.data || result;
-                    const hasUser = result.id != null || userData.id != null || userData.modou != null;
-                    if (hasUser) {
-                        const points = userData.modou ?? userData.points ?? result.modou ?? 0;
-                        merge.TotalMoney[name] = points;
-                        merge.CityBoxUserInfo.notify = `CityBox-查询成功，积分: ${points}`;
-                        merge.CityBoxUserInfo.success = 1;
-                    } else {
-                        merge.CityBoxUserInfo.notify = "CityBox-查询失败: " + (msg || '未知');
-                        merge.CityBoxUserInfo.fail = 1;
-                    }
+                    CONFIG.SKIP = true;
+                    const msg = result.message || '未知';
+                    merge.MSJRUserInfo.notify = "美素佳儿-查询失败: " + msg;
+                    merge.MSJRUserInfo.fail = 1;
                 }
             } catch (e) {
-                $nobyda.AnError("用户信息-查询", "CityBoxUserInfo", e, response, data);
+                CONFIG.SKIP = true;
+                $nobyda.AnError("用户信息-查询", "MSJRUserInfo", e, response, data);
             } finally {
                 resolve();
             }
@@ -137,42 +127,35 @@ function UserInfo(name) {
 /**
  * 签到
  */
-function CityBoxSign(delay) {
-    merge.CityBoxSign = {};
+function MSJRSign(delay) {
+    merge.MSJRSign = {};
     return new Promise(resolve => {
         if (shouldSkip()) {
             resolve();
             return;
         }
-        const ts = Date.now();
-        const url = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.SIGN}?ts=${ts}`;
         setTimeout(() => {
-            $nobyda.get({
-                url,
+            $nobyda.post({
+                url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.SIGN}`,
                 headers: {
                     token: KEY,
-                    sign: SIGN,
                     ...DEFAULT_HEADERS
-                }
+                },
+                body: JSON.stringify({ isLoading: false })
             }, (error, response, data) => {
                 try {
                     if (error) throw new Error(error);
                     const result = JSON.parse(data);
-                    const msg = result.message || result.msg || '';
-                    if (result.status === false) {
-                        merge.CityBoxSign.notify = "CityBox-签到失败: " + (msg || '未知');
-                        merge.CityBoxSign.fail = 1;
-                    } else if (result.id != null) {
-                        const data = result.data || result;
-                        const points = data.modou ?? result.modou ?? 0;
-                        merge.CityBoxSign.notify = points ? `CityBox-签到成功，积分: ${points}` : "CityBox-签到成功";
-                        merge.CityBoxSign.success = 1;
+                    const msg = result.message || '未知';
+                    if (result.result === 1) {
+                        merge.MSJRSign.notify = "美素佳儿-签到成功";
+                        merge.MSJRSign.success = 1;
                     } else {
-                        merge.CityBoxSign.notify = "CityBox-签到失败: " + (msg || '未知');
-                        merge.CityBoxSign.fail = 1;
+                        merge.MSJRSign.notify = "美素佳儿-签到失败: " + msg;
+                        merge.MSJRSign.fail = 1;
                     }
                 } catch (e) {
-                    $nobyda.AnError("CityBox-签到", "CityBoxSign", e, response, data);
+                    $nobyda.AnError("美素佳儿-签到", "MSJRSign", e, response, data);
                 } finally {
                     resolve();
                 }
@@ -183,10 +166,10 @@ function CityBoxSign(delay) {
 }
 
 /**
- * 任务（转盘/抽奖）click_num 为 1～9 的随机数
+ * 单个任务执行
  */
-function DrawResults(delay, clickNum) {
-    merge.CityBoxTask = merge.CityBoxTask || { success: 0, fail: 0 };
+function MSJRTask(delay, taskType) {
+    merge.MSJRTask = merge.MSJRTask || { success: 0, fail: 0 };
     return new Promise(resolve => {
         if (shouldSkip()) {
             resolve();
@@ -194,31 +177,98 @@ function DrawResults(delay, clickNum) {
         }
         setTimeout(() => {
             $nobyda.post({
-                url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.DRAW_RESULTS}`,
+                url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TASK}`,
                 headers: {
                     token: KEY,
-                    sign: SIGN,
                     ...DEFAULT_HEADERS
                 },
-                body: `click_num=${clickNum}`
+                body: JSON.stringify({ taskType: taskType, isLoading: false })
             }, (error, response, data) => {
                 try {
                     if (error) throw new Error(error);
                     const result = JSON.parse(data);
-                    const msg = result.message || result.msg || '';
-                    if (result.status === false) {
-                        merge.CityBoxTask.fail = (merge.CityBoxTask.fail || 0) + 1;
-                        merge.CityBoxTask.failDetail = merge.CityBoxTask.failDetail || [];
-                        merge.CityBoxTask.failDetail.push(`任务失败(click_num=${clickNum}): ${msg || '未知'}`);
-                    } else if (result.id != null) {
-                        merge.CityBoxTask.success = (merge.CityBoxTask.success || 0) + 1;
+                    const msg = result.message || '未知';
+                    if (result.result === 1) {
+                        merge.MSJRTask.success = (merge.MSJRTask.success || 0) + 1;
                     } else {
-                        merge.CityBoxTask.fail = (merge.CityBoxTask.fail || 0) + 1;
-                        merge.CityBoxTask.failDetail = merge.CityBoxTask.failDetail || [];
-                        merge.CityBoxTask.failDetail.push(`任务失败(click_num=${clickNum}): ${msg || '未知'}`);
+                        merge.MSJRTask.fail = (merge.MSJRTask.fail || 0) + 1;
+                        merge.MSJRTask.failDetail = merge.MSJRTask.failDetail || [];
+                        merge.MSJRTask.failDetail.push(`任务${taskType}失败: ${msg}`);
                     }
                 } catch (e) {
-                    $nobyda.AnError("CityBox-任务", "CityBoxTask", e, response, data);
+                    $nobyda.AnError("美素佳儿-任务", "MSJRTask", e, response, data);
+                } finally {
+                    resolve();
+                }
+            });
+        }, delay);
+        if (CONFIG.TIMEOUT) setTimeout(resolve, CONFIG.TIMEOUT + delay);
+    });
+}
+
+function shuffleArray(arr) {
+    const shuffled = [...arr];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+}
+
+/**
+ * 按分组随机顺序执行所有任务
+ */
+async function randomDelayTask(delay) {
+    if (shouldSkip()) return;
+
+    merge.MSJRTask = { success: 0, fail: 0 };
+
+    for (const group of API_CONFIG.TASK_GROUPS) {
+        const shuffled = shuffleArray(group);
+        for (const taskType of shuffled) {
+            if (shouldSkip()) break;
+
+            const waitTime = getRandomWaitTime();
+            await wait(waitTime);
+
+            await MSJRTask(delay, taskType);
+        }
+        if (shouldSkip()) break;
+    }
+}
+
+/**
+ * 牧场互动任务
+ */
+function MSJRInteraction(delay) {
+    merge.MSJRInteraction = {};
+    return new Promise(resolve => {
+        if (shouldSkip()) {
+            resolve();
+            return;
+        }
+        setTimeout(() => {
+            $nobyda.post({
+                url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.INTERACTION}`,
+                headers: {
+                    token: KEY,
+                    ...DEFAULT_HEADERS
+                },
+                body: ''
+            }, (error, response, data) => {
+                try {
+                    if (error) throw new Error(error);
+                    const result = JSON.parse(data);
+                    const msg = result.message || '未知';
+                    if (result.result === 1) {
+                        merge.MSJRInteraction.notify = "美素佳儿-牧场互动成功";
+                        merge.MSJRInteraction.success = 1;
+                    } else {
+                        merge.MSJRInteraction.notify = "美素佳儿-牧场互动失败: " + msg;
+                        merge.MSJRInteraction.fail = 1;
+                    }
+                } catch (e) {
+                    $nobyda.AnError("美素佳儿-牧场互动", "MSJRInteraction", e, response, data);
                 } finally {
                     resolve();
                 }
@@ -237,15 +287,20 @@ function notify() {
             const lines = [];
             const beforeMoney = merge.TotalMoney?.before ?? 0;
             const afterMoney = merge.TotalMoney?.after ?? 0;
-            lines.push(`CityBox任务完成，余额：${beforeMoney} -> ${afterMoney}`);
-            if (merge.CityBoxSign && merge.CityBoxSign.notify) {
-                lines.push(merge.CityBoxSign.notify);
+            lines.push(`美素佳儿任务完成，余额：${beforeMoney} -> ${afterMoney}`);
+            if (merge.MSJRSign && merge.MSJRSign.notify) {
+                lines.push(merge.MSJRSign.notify);
             }
-            const success = merge.CityBoxTask?.success ?? 0;
-            const fail = merge.CityBoxTask?.fail ?? 0;
-            lines.push(`CityBox-任务(draw_results)：成功${success}次，失败${fail}次`);
-            if (merge.CityBoxTask?.failDetail?.length) {
-                lines.push(...merge.CityBoxTask.failDetail);
+            if (merge.MSJRTask) {
+                const taskSuccess = merge.MSJRTask.success ?? 0;
+                const taskFail = merge.MSJRTask.fail ?? 0;
+                lines.push(`美素佳儿-任务：成功${taskSuccess}次，失败${taskFail}次`);
+                if (merge.MSJRTask.failDetail?.length) {
+                    lines.push(...merge.MSJRTask.failDetail);
+                }
+            }
+            if (merge.MSJRInteraction && merge.MSJRInteraction.notify) {
+                lines.push(merge.MSJRInteraction.notify);
             }
             if (shouldSkip()) {
                 lines.unshift('⚠️ 检测到Token失效，已跳过后续操作');
@@ -261,30 +316,28 @@ function notify() {
 }
 
 /**
- * 主流程：用户信息 -> 等待 -> 签到 -> 等待 -> 任务1 -> 等待 -> 任务2 -> 等待 -> 用户信息 -> 通知
+ * 主流程
  */
 async function all(cookie) {
     try {
         KEY = cookie.token;
-        SIGN = cookie.sign || API_CONFIG.SIGN;
         merge = {};
         $nobyda.num++;
 
         await UserInfo("before");
-        await wait(getRandomWaitTime());
-
-        await CityBoxSign(Wait(CONFIG.STOP_DELAY));
-        await wait(getRandomWaitTime());
-
-        const clickNum1 = Math.floor(Math.random() * 9) + 1;
-        let clickNum2 = Math.floor(Math.random() * 9) + 1;
-        while (clickNum2 === clickNum1) {
-            clickNum2 = Math.floor(Math.random() * 9) + 1;
+        if (shouldSkip()) {
+            await notify();
+            return;
         }
-        await DrawResults(0, clickNum1);
         await wait(getRandomWaitTime());
 
-        await DrawResults(0, clickNum2);
+        await MSJRSign(Wait(CONFIG.STOP_DELAY));
+        await wait(getRandomWaitTime());
+
+        await randomDelayTask(Wait(CONFIG.STOP_DELAY));
+        await wait(getRandomWaitTime());
+
+        await MSJRInteraction(Wait(CONFIG.STOP_DELAY));
         await wait(getRandomWaitTime());
 
         await UserInfo("after");
@@ -313,25 +366,22 @@ function GetCookie() {
             }
         }
         let token = req.headers?.token || req.headers?.Token || '';
-        let sign = req.headers?.sign || req.headers?.Sign || '';
-        if (/api\.icitybox\.cn\/api\/user\/get_user_info/.test(url)) {
-            const hasUser = bodyData && (bodyData.id != null || bodyData.data?.id != null);
-            if (hasUser || token) {
-                if (!token && bodyData?.data?.token) token = bodyData.data.token;
-                if (!sign && bodyData?.data?.sign) sign = bodyData.data.sign;
+        if (/metaverse\.rfc-friso\.com\/exchange\/userInfo/.test(url)) {
+            const isSuccess = bodyData && bodyData.result === 1 && bodyData.mdata?.userInfo;
+            if (isSuccess || token) {
                 if (token) {
-                    let existedRaw = $nobyda.read('MHCityBoxCookies');
+                    let existedRaw = $nobyda.read('MSJRCookies');
                     let existed = null;
                     try {
                         existed = typeof existedRaw === 'string' ? JSON.parse(existedRaw) : existedRaw;
                     } catch (e) {
                         existed = null;
                     }
-                    if (existed && existed.token === token && existed.sign === sign) return;
-                    const tokenData = { token, sign: sign || existed?.sign || '' };
-                    const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'MHCityBoxCookies');
-                    console.log('CityBox 获取 token/sign 成功: ' + JSON.stringify(tokenData));
-                    $nobyda.notify('CityBox', '', `写入 Token${sign ? '、Sign' : ''} ${writeResult ? '成功 🎉' : '失败 ‼️'}`);
+                    if (existed && existed.token === token) return;
+                    const tokenData = { token };
+                    const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'MSJRCookies');
+                    console.log('美素佳儿 获取 token 成功: ' + JSON.stringify(tokenData));
+                    $nobyda.notify('美素佳儿', '', `写入 Token ${writeResult ? '成功 🎉' : '失败 ‼️'}`);
                 } else {
                     throw new Error('Cookie 中未获取到 token');
                 }
@@ -344,7 +394,7 @@ function GetCookie() {
 
 (async function ReadCookie() {
     try {
-        const cookiesInfo = "MHCityBoxCookies";
+        const cookiesInfo = "MSJRCookies";
         const cookiesData = $nobyda.read(cookiesInfo);
         if ($nobyda.isRequest) {
             GetCookie();
@@ -365,7 +415,7 @@ function GetCookie() {
                 const initWaitMin = 0;                 // 0 分钟（毫秒）
                 const initWaitMax = 15 * 60 * 1000;   // 15 分钟（毫秒）
                 const initWaitMs = Math.floor(Math.random() * (initWaitMax - initWaitMin + 1)) + initWaitMin;
-                console.log('CityBox 主流程将在 ' + Math.round(initWaitMs / 60000) + ' 分钟后开始');
+                console.log('美素佳儿 主流程将在 ' + Math.round(initWaitMs / 60000) + ' 分钟后开始');
                 await wait(initWaitMs);
                 await all(cookies);
             } else {
@@ -376,7 +426,7 @@ function GetCookie() {
             throw new Error('脚本终止, 未获取 Cookie ‼️');
         }
     } catch (error) {
-        $nobyda.notify("CityBox 签到", "", error.message || JSON.stringify(error));
+        $nobyda.notify("美素佳儿 签到", "", error.message || JSON.stringify(error));
     } finally {
         if ($nobyda.isJSBox) $intents.finish($nobyda.st);
         $nobyda.done();
@@ -391,7 +441,7 @@ function nobyda() {
     const isLoon = typeof $loon !== "undefined";
     const isJSBox = typeof $app !== "undefined" && typeof $http !== "undefined";
     const isNode = typeof require === "function" && !isJSBox;
-    const NodeSet = 'MHCityBoxSet.json';
+    const NodeSet = 'MSJRSet.json';
 
     const node = (() => {
         if (isNode) {
