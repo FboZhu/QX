@@ -180,9 +180,10 @@ function MSJRTask(delay, taskType) {
                 url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TASK}`,
                 headers: {
                     token: KEY,
-                    ...DEFAULT_HEADERS
+                    ...DEFAULT_HEADERS,
+                    'content-type': 'application/x-www-form-urlencoded'
                 },
-                body: JSON.stringify({ taskType: taskType, isLoading: false })
+                body: `taskType=${taskType}&isLoading=false`
             }, (error, response, data) => {
                 try {
                     if (error) throw new Error(error);
@@ -252,7 +253,8 @@ function MSJRInteraction(delay) {
                 url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.INTERACTION}`,
                 headers: {
                     token: KEY,
-                    ...DEFAULT_HEADERS
+                    ...DEFAULT_HEADERS,
+                    'content-type': 'application/x-www-form-urlencoded'
                 },
                 body: ''
             }, (error, response, data) => {
