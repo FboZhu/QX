@@ -30,13 +30,8 @@ const API_CONFIG = {
     ENDPOINTS: {
         USER_INFO: '/exchange/userInfo',
         SIGN: '/task/signIn',
-        TASK: '/point/pointOperate',
         INTERACTION: '/organicRanch/findInteraction'
-    },
-    TASK_GROUPS: [
-        [202, 203, 204, 205, 206],
-        [502, 503, 504]
-    ]
+    }
 };
 
 // 默认请求头
@@ -166,79 +161,6 @@ function MSJRSign(delay) {
 }
 
 /**
- * 单个任务执行
- */
-function MSJRTask(delay, taskType) {
-    merge.MSJRTask = merge.MSJRTask || { success: 0, fail: 0 };
-    return new Promise(resolve => {
-        if (shouldSkip()) {
-            resolve();
-            return;
-        }
-        setTimeout(() => {
-            $nobyda.post({
-                url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TASK}`,
-                headers: {
-                    token: KEY,
-                    ...DEFAULT_HEADERS,
-                    'content-type': 'application/x-www-form-urlencoded'
-                },
-                body: `taskType=${taskType}&isLoading=false`
-            }, (error, response, data) => {
-                try {
-                    if (error) throw new Error(error);
-                    const result = JSON.parse(data);
-                    const msg = result.message || '未知';
-                    if (result.result === 1) {
-                        merge.MSJRTask.success = (merge.MSJRTask.success || 0) + 1;
-                    } else {
-                        merge.MSJRTask.fail = (merge.MSJRTask.fail || 0) + 1;
-                        merge.MSJRTask.failDetail = merge.MSJRTask.failDetail || [];
-                        merge.MSJRTask.failDetail.push(`任务${taskType}失败: ${msg}`);
-                    }
-                } catch (e) {
-                    $nobyda.AnError("美素佳儿-任务", "MSJRTask", e, response, data);
-                } finally {
-                    resolve();
-                }
-            });
-        }, delay);
-        if (CONFIG.TIMEOUT) setTimeout(resolve, CONFIG.TIMEOUT + delay);
-    });
-}
-
-function shuffleArray(arr) {
-    const shuffled = [...arr];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    return shuffled;
-}
-
-/**
- * 按分组随机顺序执行所有任务
- */
-async function randomDelayTask(delay) {
-    if (shouldSkip()) return;
-
-    merge.MSJRTask = { success: 0, fail: 0 };
-
-    for (const group of API_CONFIG.TASK_GROUPS) {
-        const shuffled = shuffleArray(group);
-        for (const taskType of shuffled) {
-            if (shouldSkip()) break;
-
-            const waitTime = getRandomWaitTime();
-            await wait(waitTime);
-
-            await MSJRTask(delay, taskType);
-        }
-        if (shouldSkip()) break;
-    }
-}
-
-/**
  * 牧场互动任务
  */
 function MSJRInteraction(delay) {
@@ -293,14 +215,6 @@ function notify() {
             if (merge.MSJRSign && merge.MSJRSign.notify) {
                 lines.push(merge.MSJRSign.notify);
             }
-            if (merge.MSJRTask) {
-                const taskSuccess = merge.MSJRTask.success ?? 0;
-                const taskFail = merge.MSJRTask.fail ?? 0;
-                lines.push(`美素佳儿-任务：成功${taskSuccess}次，失败${taskFail}次`);
-                if (merge.MSJRTask.failDetail?.length) {
-                    lines.push(...merge.MSJRTask.failDetail);
-                }
-            }
             if (merge.MSJRInteraction && merge.MSJRInteraction.notify) {
                 lines.push(merge.MSJRInteraction.notify);
             }
@@ -334,9 +248,6 @@ async function all(cookie) {
         await wait(getRandomWaitTime());
 
         await MSJRSign(Wait(CONFIG.STOP_DELAY));
-        await wait(getRandomWaitTime());
-
-        await randomDelayTask(Wait(CONFIG.STOP_DELAY));
         await wait(getRandomWaitTime());
 
         await MSJRInteraction(Wait(CONFIG.STOP_DELAY));
