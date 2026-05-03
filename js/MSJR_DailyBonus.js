@@ -28,7 +28,7 @@ const CONFIG = {
 const API_CONFIG = {
     BASE_URL: 'https://metaverse.rfc-friso.com',
     ENDPOINTS: {
-        USER_INFO: '/exchange/userInfo',
+        USER_INFO: '/user/userInfo',
         SIGN: '/task/signIn',
         INTERACTION: '/organicRanch/findInteraction'
     }
