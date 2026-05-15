@@ -727,7 +727,7 @@ function GetCookie() {
             if (cookies && cookies.token) {
                 // 主流程启动前随机等待 0-15 分钟
                 const initWaitMin = 0;                 // 0 分钟（毫秒）
-                const initWaitMax = 15 * 60 * 1000;   // 15 分钟（毫秒）
+                const initWaitMax = 5 * 60 * 1000;   // 15 分钟（毫秒）
                 const initWaitMs = Math.floor(Math.random() * (initWaitMax - initWaitMin + 1)) + initWaitMin;
                 console.log('毛豆充 主流程将在 ' + Math.round(initWaitMs / 60000) + ' 分钟后开始');
                 await new Promise(resolve => setTimeout(resolve, initWaitMs));
