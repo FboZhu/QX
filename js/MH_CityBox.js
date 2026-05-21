@@ -18,6 +18,7 @@ hostname = api.icitybox.cn
 const CONFIG = {
     LOG_DETAILS: false,
     STOP_DELAY: '0',
+    INIT_DELAY: '0-120000',
     TIMEOUT: 0,
     MIN_WAIT_TIME: 2000,  // 接口间最小等待(毫秒)
     MAX_WAIT_TIME: 5000,  // 接口间最大等待(毫秒)
@@ -361,11 +362,8 @@ function GetCookie() {
             CONFIG.STOP_DELAY = delay;
             $nobyda.num = 0;
             if (cookies && cookies.token) {
-                // 主流程启动前随机等待 0-15 分钟
-                const initWaitMin = 0;                 // 0 分钟（毫秒）
-                const initWaitMax = 5 * 60 * 1000;   // 15 分钟（毫秒）
-                const initWaitMs = Math.floor(Math.random() * (initWaitMax - initWaitMin + 1)) + initWaitMin;
-                console.log('CityBox 主流程将在 ' + Math.round(initWaitMs / 60000) + ' 分钟后开始');
+                const initWaitMs = Wait($nobyda.read("InitDelay") || CONFIG.INIT_DELAY);
+                console.log('CityBox 主流程将在 ' + initWaitMs + ' 毫秒后开始');
                 await wait(initWaitMs);
                 await all(cookies);
             } else {
@@ -538,6 +536,7 @@ function nobyda() {
     const done = (value = {}) => {
         if (isQuanX) return $done(value);
         if (isSurge) return isRequest ? $done(value) : $done();
+        if (isLoon) return isRequest ? $done(value) : $done();
     };
 
     return { AnError, isRequest, isJSBox, isSurge, isQuanX, isLoon, isNode, notify, write, read, get, post, time, done };

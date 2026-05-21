@@ -18,6 +18,7 @@ hostname = apiv2.hichar.cn
 const CONFIG = {
     LOG_DETAILS: false, // 是否开启响应日志
     STOP_DELAY: '0', // 自定义延迟签到，单位毫秒
+    INIT_DELAY: '0-120000', // 主流程启动前随机等待，单位毫秒
     TIMEOUT: 0, // 接口超时退出，0则关闭
     MIN_WAIT_TIME: 5000, // 最小等待时间
     MAX_WAIT_TIME: 10000, // 最大等待时间
@@ -725,11 +726,8 @@ function GetCookie() {
             $nobyda.num = 0;
 
             if (cookies && cookies.token) {
-                // 主流程启动前随机等待 0-15 分钟
-                const initWaitMin = 0;                 // 0 分钟（毫秒）
-                const initWaitMax = 5 * 60 * 1000;   // 15 分钟（毫秒）
-                const initWaitMs = Math.floor(Math.random() * (initWaitMax - initWaitMin + 1)) + initWaitMin;
-                console.log('毛豆充 主流程将在 ' + Math.round(initWaitMs / 60000) + ' 分钟后开始');
+                const initWaitMs = Wait($nobyda.read("InitDelay") || CONFIG.INIT_DELAY);
+                console.log('毛豆充 主流程将在 ' + initWaitMs + ' 毫秒后开始');
                 await new Promise(resolve => setTimeout(resolve, initWaitMs));
                 await all(cookies);
             } else {
@@ -963,6 +961,7 @@ function nobyda() {
     const done = (value = {}) => {
         if (isQuanX) return $done(value);
         if (isSurge) return isRequest ? $done(value) : $done();
+        if (isLoon) return isRequest ? $done(value) : $done();
     };
 
     return {
