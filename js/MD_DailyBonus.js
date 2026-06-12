@@ -60,6 +60,45 @@ let merge = {};
 let KEY = '';
 let USER = 0;
 
+function isLegacyTokenData(data) {
+    return !!(data && typeof data === 'object' && !Array.isArray(data) && Object.prototype.hasOwnProperty.call(data, 'userId') && Object.prototype.hasOwnProperty.call(data, 'token'));
+}
+
+function migrateTokenData(data) {
+    if (isLegacyTokenData(data)) {
+        return data.userId && data.token ? { [String(data.userId)]: String(data.token) } : {};
+    }
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+}
+
+function parseTokenStore(rawData) {
+    if (typeof rawData === 'string') {
+        return JSON.parse(rawData);
+    }
+    return rawData;
+}
+
+function loadTokenStore(rawData) {
+    const data = parseTokenStore(rawData);
+    if (isLegacyTokenData(data)) {
+        const migrated = migrateTokenData(data);
+        return { data: migrated, migrated: true };
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return { data: {}, migrated: false };
+    }
+    return { data, migrated: false };
+}
+
+function shuffleEntries(entries) {
+    const list = Array.isArray(entries) ? [...entries] : [];
+    for (let i = list.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+}
+
 /**
  * 检查是否需要跳过执行
  */
@@ -73,6 +112,7 @@ function shouldSkip() {
  */
 async function all(cookie) {
     try {
+        CONFIG.SKIP = false;
         KEY = cookie.token;
         USER = cookie.userId;
         merge = {};
@@ -669,19 +709,29 @@ function GetCookie() {
 
         if (userId && token) {
             // 读取已有Cookies并比较，避免重复写入
-            let existedRaw = $nobyda.read('Cookies');
-            let existed = null;
+            let existed = {};
+            let migrated = false;
             try {
-                existed = typeof existedRaw === 'string' ? JSON.parse(existedRaw) : existedRaw;
+                const store = loadTokenStore($nobyda.read('Cookies'));
+                existed = store.data;
+                migrated = store.migrated;
             } catch (e) {
-                existed = null;
+                existed = {};
             }
 
-            if (existed && existed.userId === userId && existed.token === token) {
+            if (migrated) {
+                const migrateResult = $nobyda.write(JSON.stringify(existed, null, 2), 'Cookies');
+                console.log('旧格式Cookies已迁移: ' + JSON.stringify(existed));
+                if (!migrateResult) {
+                    $nobyda.notify(`用户名: ${userId}`, '', `旧格式Cookies迁移失败，请检查存储状态`);
+                }
+            }
+
+            if (existed && existed[String(userId)] === token) {
                 // 数据未变化，静默跳过写入与通知，避免重复噪音
                 return;
             } else {
-                const tokenData = {userId, token};
+                const tokenData = { ...existed, [String(userId)]: token };
                 const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'Cookies');
                 console.log('获取用户token成功: ' + JSON.stringify(tokenData));
                 $nobyda.notify(`用户名: ${userId}`, '', `写入[账号${userId}] Token ${writeResult ? '成功 🎉' : '失败 ‼️'}`);
@@ -704,10 +754,18 @@ function GetCookie() {
         if ($nobyda.isRequest) {
             GetCookie();
         } else if (cookiesData) {
-            // 解析cookies数据
+            // 解析cookies数据，旧格式先迁移，新格式直接执行
             let cookies;
             try {
-                cookies = typeof cookiesData === 'string' ? JSON.parse(cookiesData) : cookiesData;
+                const store = loadTokenStore(cookiesData);
+                cookies = store.data;
+                if (store.migrated) {
+                    const migrateResult = $nobyda.write(JSON.stringify(cookies, null, 2), 'Cookies');
+                    console.log('旧格式Cookies已迁移: ' + JSON.stringify(cookies));
+                    if (!migrateResult) {
+                        throw new Error('旧格式Cookies迁移失败');
+                    }
+                }
             } catch (error) {
                 console.error('解析Cookies数据失败:', error);
                 throw new Error('Cookie数据格式错误');
@@ -725,13 +783,17 @@ function GetCookie() {
 
             $nobyda.num = 0;
 
-            if (cookies && cookies.token) {
+            const tokenEntries = shuffleEntries(Object.entries(cookies || {}));
+            if (tokenEntries.length > 0) {
                 const initWaitMs = Wait($nobyda.read("InitDelay") || CONFIG.INIT_DELAY);
                 console.log('毛豆充 主流程将在 ' + initWaitMs + ' 毫秒后开始');
                 await new Promise(resolve => setTimeout(resolve, initWaitMs));
-                await all(cookies);
+                for (const [userId, token] of tokenEntries) {
+                    if (!token) continue;
+                    await all({ userId, token });
+                }
             } else {
-                throw new Error('Cookie中缺少token信息');
+                throw new Error('Cookie中缺少可执行的token信息');
             }
 
             $nobyda.time();
