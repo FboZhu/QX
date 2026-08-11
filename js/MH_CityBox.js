@@ -275,11 +275,11 @@ async function notify() {
             }
         const content = lines.join('\n');
         console.log(content);
-        $nobyda.notify('', '', content);
+        // $nobyda.notify('', '', content);
         await sendWxPusher('CityBox 执行通知', content);
     } catch (e) {
         const content = e.message || String(e);
-        $nobyda.notify('通知模块 ' + e.name + '‼️', '', content);
+        // $nobyda.notify('通知模块 ' + e.name + '‼️', '', content);
         await sendWxPusher('CityBox 执行通知', content);
     }
 }
@@ -356,7 +356,7 @@ async function GetCookie() {
                     const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'MHCityBoxCookies');
                     console.log('CityBox 获取 token/sign 成功: ' + JSON.stringify(tokenData));
                     const content = `写入 Token${sign ? '、Sign' : ''} ${writeResult ? '成功 🎉' : '失败 ‼️'}`;
-                    $nobyda.notify('CityBox', '', content);
+                    // $nobyda.notify('CityBox', '', content);
                     await sendWxPusher('CityBox 获取用户 Token', content);
                 } else {
                     throw new Error('Cookie 中未获取到 token');
@@ -365,7 +365,7 @@ async function GetCookie() {
         }
     } catch (e) {
         const content = e?.message || String(e);
-        $nobyda.notify('GetCookie', '', content);
+        // $nobyda.notify('GetCookie', '', content);
         await sendWxPusher('CityBox 获取用户 Token 失败', content);
     }
 }
@@ -401,7 +401,7 @@ async function GetCookie() {
             throw new Error('脚本终止, 未获取 Cookie ‼️');
         }
     } catch (error) {
-        $nobyda.notify("CityBox 签到", "", error.message || JSON.stringify(error));
+        // $nobyda.notify("CityBox 签到", "", error.message || JSON.stringify(error));
     } finally {
         if ($nobyda.isJSBox) $intents.finish($nobyda.st);
         $nobyda.done();

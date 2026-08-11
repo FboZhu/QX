@@ -246,11 +246,11 @@ async function notify() {
             }
         const content = lines.join('\n');
         console.log(content);
-        $nobyda.notify('', '', content);
+        // $nobyda.notify('', '', content);
         await sendWxPusher('美素佳儿执行通知', content);
     } catch (e) {
         const content = e.message || String(e);
-        $nobyda.notify('通知模块 ' + e.name + '‼️', '', content);
+        // $nobyda.notify('通知模块 ' + e.name + '‼️', '', content);
         await sendWxPusher('美素佳儿执行通知', content);
     }
 }
@@ -319,7 +319,7 @@ async function GetCookie() {
                     const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'MSJRCookies');
                     console.log('美素佳儿 获取 token 成功: ' + JSON.stringify(tokenData));
                     const content = `写入 Token ${writeResult ? '成功 🎉' : '失败 ‼️'}`;
-                    $nobyda.notify('美素佳儿', '', content);
+                    // $nobyda.notify('美素佳儿', '', content);
                     await sendWxPusher('美素佳儿获取用户 Token', content);
                 } else {
                     throw new Error('Cookie 中未获取到 token');
@@ -328,7 +328,7 @@ async function GetCookie() {
         }
     } catch (e) {
         const content = e?.message || String(e);
-        $nobyda.notify('GetCookie', '', content);
+        // $nobyda.notify('GetCookie', '', content);
         await sendWxPusher('美素佳儿获取用户 Token 失败', content);
     }
 }
@@ -364,7 +364,7 @@ async function GetCookie() {
             throw new Error('脚本终止, 未获取 Cookie ‼️');
         }
     } catch (error) {
-        $nobyda.notify("美素佳儿 签到", "", error.message || JSON.stringify(error));
+        // $nobyda.notify("美素佳儿 签到", "", error.message || JSON.stringify(error));
     } finally {
         if ($nobyda.isJSBox) $intents.finish($nobyda.st);
         $nobyda.done();

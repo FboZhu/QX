@@ -401,11 +401,11 @@ async function notify() {
             }
         const content = notifyLines.join('\n');
         console.log(content);
-        $nobyda.notify('', '', content);
+        // $nobyda.notify('', '', content);
         await sendWxPusher('毛豆充执行通知', content);
     } catch (error) {
         const content = error.message || JSON.stringify(error);
-        $nobyda.notify('通知模块 ' + error.name + '‼️', JSON.stringify(error), content);
+        // $nobyda.notify('通知模块 ' + error.name + '‼️', JSON.stringify(error), content);
         await sendWxPusher('毛豆充执行通知', content);
     }
 }
@@ -756,7 +756,7 @@ async function GetCookie() {
                 const migrateResult = $nobyda.write(JSON.stringify(existed, null, 2), 'Cookies');
                 console.log('旧格式Cookies已迁移: ' + JSON.stringify(existed));
                 if (!migrateResult) {
-                    $nobyda.notify(`用户名: ${userId}`, '', `旧格式Cookies迁移失败，请检查存储状态`);
+                    // $nobyda.notify(`用户名: ${userId}`, '', `旧格式Cookies迁移失败，请检查存储状态`);
                 }
             }
 
@@ -768,7 +768,7 @@ async function GetCookie() {
                 const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'Cookies');
                 console.log('获取用户token成功: ' + JSON.stringify(tokenData));
                 const content = `写入[账号${userId}] Token ${writeResult ? '成功 🎉' : '失败 ‼️'}`;
-                $nobyda.notify(`用户名: ${userId}`, '', content);
+                // $nobyda.notify(`用户名: ${userId}`, '', content);
                 await sendWxPusher(`毛豆充获取用户 Token：${userId}`, content);
             }
         } else {
@@ -776,7 +776,7 @@ async function GetCookie() {
         }
     } catch (e) {
         const content = e?.message || String(e);
-        $nobyda.notify('GetCookie', '', content);
+        // $nobyda.notify('GetCookie', '', content);
         await sendWxPusher('毛豆充获取用户 Token 失败', content);
     }
 }
@@ -838,7 +838,7 @@ async function GetCookie() {
             throw new Error('脚本终止, 未获取Cookie ‼️');
         }
     } catch (error) {
-        $nobyda.notify("毛豆充签到", "", error.message || JSON.stringify(error));
+        // $nobyda.notify("毛豆充签到", "", error.message || JSON.stringify(error));
     } finally {
         if ($nobyda.isJSBox) $intents.finish($nobyda.st);
         $nobyda.done();
