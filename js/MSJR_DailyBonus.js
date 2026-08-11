@@ -25,6 +25,12 @@ const CONFIG = {
     SKIP: false
 };
 
+const WX_PUSHER = {
+    URL: 'https://wxpusher.zjiecode.com/api/send/message',
+    APP_TOKEN: 'AT_boG9xcxlPdixmvmDJYjuesBxH1OMpgLL',
+    UID: 'UID_BnvuCofAsHE7FWAuUNAOyVLwCTLk'
+};
+
 // API配置
 const API_CONFIG = {
     BASE_URL: 'https://metaverse.rfc-friso.com',
@@ -206,9 +212,25 @@ function MSJRInteraction(delay) {
 /**
  * 通知
  */
-function notify() {
-    return new Promise(resolve => {
-        try {
+async function sendWxPusher(summary, content) {
+    try {
+        await new Promise(resolve => {
+            $nobyda.post({
+                url: WX_PUSHER.URL,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ appToken: WX_PUSHER.APP_TOKEN, summary, content, contentType: 1, uids: [WX_PUSHER.UID], verifyPay: false, verifyPayType: 0 })
+            }, (error, response, body) => {
+                if (error || !response || response.statusCode < 200 || response.statusCode >= 300) console.log(`WxPusher 发送失败: ${error || body || '未知错误'}`);
+                resolve();
+            });
+        });
+    } catch (error) {
+        console.log(`WxPusher 发送异常: ${error.message || error}`);
+    }
+}
+
+async function notify() {
+    try {
             const lines = [];
             const beforeMoney = merge.TotalMoney?.before ?? 0;
             const afterMoney = merge.TotalMoney?.after ?? 0;
@@ -222,14 +244,15 @@ function notify() {
             if (shouldSkip()) {
                 lines.unshift('⚠️ 检测到Token失效，已跳过后续操作');
             }
-            console.log(lines.join('\n'));
-            $nobyda.notify('', '', lines.join('\n'));
-        } catch (e) {
-            $nobyda.notify('通知模块 ' + e.name + '‼️', '', e.message);
-        } finally {
-            resolve();
-        }
-    });
+        const content = lines.join('\n');
+        console.log(content);
+        $nobyda.notify('', '', content);
+        await sendWxPusher('美素佳儿执行通知', content);
+    } catch (e) {
+        const content = e.message || String(e);
+        $nobyda.notify('通知模块 ' + e.name + '‼️', '', content);
+        await sendWxPusher('美素佳儿执行通知', content);
+    }
 }
 
 /**
@@ -264,7 +287,7 @@ async function all(cookie) {
 /**
  * 从响应/请求中获取 Cookie（Token）
  */
-function GetCookie() {
+async function GetCookie() {
     const req = $request;
     const resp = $response;
     if (!req || req.method === 'OPTIONS') return;
@@ -295,14 +318,18 @@ function GetCookie() {
                     const tokenData = { token };
                     const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'MSJRCookies');
                     console.log('美素佳儿 获取 token 成功: ' + JSON.stringify(tokenData));
-                    $nobyda.notify('美素佳儿', '', `写入 Token ${writeResult ? '成功 🎉' : '失败 ‼️'}`);
+                    const content = `写入 Token ${writeResult ? '成功 🎉' : '失败 ‼️'}`;
+                    $nobyda.notify('美素佳儿', '', content);
+                    await sendWxPusher('美素佳儿获取用户 Token', content);
                 } else {
                     throw new Error('Cookie 中未获取到 token');
                 }
             }
         }
     } catch (e) {
-        $nobyda.notify('GetCookie', '', e?.message || String(e));
+        const content = e?.message || String(e);
+        $nobyda.notify('GetCookie', '', content);
+        await sendWxPusher('美素佳儿获取用户 Token 失败', content);
     }
 }
 
@@ -311,7 +338,7 @@ function GetCookie() {
         const cookiesInfo = "MSJRCookies";
         const cookiesData = $nobyda.read(cookiesInfo);
         if ($nobyda.isRequest) {
-            GetCookie();
+            await GetCookie();
         } else if (cookiesData) {
             let cookies;
             try {
