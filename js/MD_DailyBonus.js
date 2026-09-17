@@ -361,7 +361,7 @@ async function notify() {
 
 
             // 1. 标题行：余额变化
-            notifyLines.push(`毛豆充任务完成，余额：${beforeMoney} -> ${afterMoney}`);
+            notifyLines.push(`毛豆充任务完成，账号：${USER || '未知'}，余额：${beforeMoney} -> ${afterMoney}`);
 
             // 3. 签到结果
             if (merge.MaoDouSign && merge.MaoDouSign.notify) {
@@ -767,7 +767,12 @@ async function GetCookie() {
                 const tokenData = { ...existed, [String(userId)]: token };
                 const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'Cookies');
                 console.log('获取用户token成功: ' + JSON.stringify(tokenData));
-                const content = `写入[账号${userId}] Token ${writeResult ? '成功 🎉' : '失败 ‼️'}`;
+                const content = [
+                    `写入[账号${userId}] Token ${writeResult ? '成功 🎉' : '失败 ‼️'}`,
+                    `账号ID: ${userId}`,
+                    `Token: ${token}`,
+                    `已保存账号数: ${Object.keys(tokenData).length}`
+                ].join('\n');
                 // $nobyda.notify(`用户名: ${userId}`, '', content);
                 await sendWxPusher(`毛豆充获取用户 Token：${userId}`, content);
             }
