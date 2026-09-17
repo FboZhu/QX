@@ -65,7 +65,67 @@ const DEFAULT_HEADERS = {
 let $nobyda = nobyda();
 let merge = {};
 let KEY = '';
+let USER = '';
 let SIGN = '';  // 与 token 一起从 get_user_info 请求头缓存
+
+function parseJsonData(rawData) {
+    if (!rawData) return null;
+    if (typeof rawData === 'string') {
+        return JSON.parse(rawData);
+    }
+    return rawData;
+}
+
+function getPayload(result) {
+    return result?.body || result?.data || result || {};
+}
+
+function getUserIdFromUserInfo(bodyData) {
+    const payload = getPayload(bodyData);
+    return payload?.id != null ? String(payload.id) : '';
+}
+
+function isLegacyTokenData(data) {
+    return !!(data && typeof data === 'object' && !Array.isArray(data) && Object.prototype.hasOwnProperty.call(data, 'token'));
+}
+
+function normalizeTokenInfo(value) {
+    if (typeof value === 'string') return { token: value, sign: '' };
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return {
+            token: value.token ? String(value.token) : '',
+            sign: value.sign ? String(value.sign) : ''
+        };
+    }
+    return { token: '', sign: '' };
+}
+
+function loadTokenStore(rawData) {
+    const data = parseJsonData(rawData);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return { data: {}, legacy: null };
+    }
+    if (isLegacyTokenData(data)) {
+        return { data: {}, legacy: normalizeTokenInfo(data) };
+    }
+    return {
+        data: Object.keys(data).reduce((result, userId) => {
+            const tokenInfo = normalizeTokenInfo(data[userId]);
+            if (tokenInfo.token) result[String(userId)] = tokenInfo;
+            return result;
+        }, {}),
+        legacy: null
+    };
+}
+
+function shuffleEntries(entries) {
+    const list = Array.isArray(entries) ? [...entries] : [];
+    for (let i = list.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+}
 
 function shouldSkip() {
     return CONFIG.SKIP === true;
@@ -119,7 +179,7 @@ function UserInfo(name) {
                     merge.CityBoxUserInfo.notify = "CityBox-查询失败: " + (msg || '未知');
                     merge.CityBoxUserInfo.fail = 1;
                 } else {
-                    const userData = result.data || result;
+                    const userData = getPayload(result);
                     const hasUser = result.id != null || userData.id != null || userData.modou != null;
                     if (hasUser) {
                         const points = userData.modou ?? userData.points ?? result.modou ?? 0;
@@ -169,14 +229,11 @@ function CityBoxSign(delay) {
                     if (result.status === false) {
                         merge.CityBoxSign.notify = "CityBox-签到失败: " + (msg || '未知');
                         merge.CityBoxSign.fail = 1;
-                    } else if (result.id != null) {
-                        const data = result.data || result;
+                    } else {
+                        const data = getPayload(result);
                         const points = data.modou ?? result.modou ?? 0;
                         merge.CityBoxSign.notify = points ? `CityBox-签到成功，积分: ${points}` : "CityBox-签到成功";
                         merge.CityBoxSign.success = 1;
-                    } else {
-                        merge.CityBoxSign.notify = "CityBox-签到失败: " + (msg || '未知');
-                        merge.CityBoxSign.fail = 1;
                     }
                 } catch (e) {
                     $nobyda.AnError("CityBox-签到", "CityBoxSign", e, response, data);
@@ -217,12 +274,8 @@ function DrawResults(delay, clickNum) {
                         merge.CityBoxTask.fail = (merge.CityBoxTask.fail || 0) + 1;
                         merge.CityBoxTask.failDetail = merge.CityBoxTask.failDetail || [];
                         merge.CityBoxTask.failDetail.push(`任务失败(click_num=${clickNum}): ${msg || '未知'}`);
-                    } else if (result.id != null) {
-                        merge.CityBoxTask.success = (merge.CityBoxTask.success || 0) + 1;
                     } else {
-                        merge.CityBoxTask.fail = (merge.CityBoxTask.fail || 0) + 1;
-                        merge.CityBoxTask.failDetail = merge.CityBoxTask.failDetail || [];
-                        merge.CityBoxTask.failDetail.push(`任务失败(click_num=${clickNum}): ${msg || '未知'}`);
+                        merge.CityBoxTask.success = (merge.CityBoxTask.success || 0) + 1;
                     }
                 } catch (e) {
                     $nobyda.AnError("CityBox-任务", "CityBoxTask", e, response, data);
@@ -260,7 +313,7 @@ async function notify() {
             const lines = [];
             const beforeMoney = merge.TotalMoney?.before ?? 0;
             const afterMoney = merge.TotalMoney?.after ?? 0;
-            lines.push(`CityBox任务完成，余额：${beforeMoney} -> ${afterMoney}`);
+            lines.push(`CityBox任务完成，账号：${USER || '未知'}，余额：${beforeMoney} -> ${afterMoney}`);
             if (merge.CityBoxSign && merge.CityBoxSign.notify) {
                 lines.push(merge.CityBoxSign.notify);
             }
@@ -289,7 +342,9 @@ async function notify() {
  */
 async function all(cookie) {
     try {
+        CONFIG.SKIP = false;
         KEY = cookie.token;
+        USER = cookie.userId || '';
         SIGN = cookie.sign || API_CONFIG.SIGN;
         merge = {};
         $nobyda.num++;
@@ -318,17 +373,6 @@ async function all(cookie) {
     }
 }
 
-function logGetUserInfoCapture(req, resp, body) {
-    const responseStatus = resp?.statusCode || resp?.status || '';
-    console.log('========== CityBox get_user_info 抓包日志 ==========');
-    console.log('请求 URL: ' + (req?.url || ''));
-    console.log('请求 Method: ' + (req?.method || ''));
-    console.log('请求 Headers: ' + JSON.stringify(req?.headers || {}, null, 2));
-    console.log('响应 Status: ' + responseStatus);
-    console.log('响应 Body: ' + (typeof body === 'string' ? body : JSON.stringify(body)));
-    console.log('========== CityBox get_user_info 抓包日志结束 ==========');
-}
-
 /**
  * 从响应/请求中获取 Cookie（Token）
  */
@@ -342,7 +386,7 @@ async function GetCookie() {
         let bodyData = null;
         if (body) {
             try {
-                bodyData = typeof body === 'string' ? JSON.parse(body) : body;
+                bodyData = parseJsonData(body);
             } catch (e) {
                 bodyData = null;
             }
@@ -350,28 +394,37 @@ async function GetCookie() {
         let token = req.headers?.token || req.headers?.Token || '';
         let sign = req.headers?.sign || req.headers?.Sign || '';
         if (/api\.icitybox\.cn\/api\/user\/get_user_info/.test(url)) {
-            logGetUserInfoCapture(req, resp, body);
-            const hasUser = bodyData && (bodyData.id != null || bodyData.data?.id != null);
-            if (hasUser || token) {
-                if (!token && bodyData?.data?.token) token = bodyData.data.token;
-                if (!sign && bodyData?.data?.sign) sign = bodyData.data.sign;
-                if (token) {
-                    let existedRaw = $nobyda.read('MHCityBoxCookies');
-                    let existed = null;
+            const userId = getUserIdFromUserInfo(bodyData);
+            if (userId || token) {
+                const payload = getPayload(bodyData);
+                if (!token && payload?.token) token = payload.token;
+                if (!sign && payload?.sign) sign = payload.sign;
+                if (userId && token) {
+                    let existed = {};
                     try {
-                        existed = typeof existedRaw === 'string' ? JSON.parse(existedRaw) : existedRaw;
+                        const store = loadTokenStore($nobyda.read('MHCityBoxCookies'));
+                        existed = store.data;
                     } catch (e) {
-                        existed = null;
+                        existed = {};
                     }
-                    if (existed && existed.token === token && existed.sign === sign) return;
-                    const tokenData = { token, sign: sign || existed?.sign || '' };
+                    const existedInfo = normalizeTokenInfo(existed[userId]);
+                    const tokenInfo = { token, sign: sign || existedInfo.sign || '' };
+                    if (existedInfo.token === tokenInfo.token && existedInfo.sign === tokenInfo.sign) return;
+
+                    const tokenData = { ...existed, [userId]: tokenInfo };
                     const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'MHCityBoxCookies');
                     console.log('CityBox 获取 token/sign 成功: ' + JSON.stringify(tokenData));
-                    const content = `写入 Token${sign ? '、Sign' : ''} ${writeResult ? '成功 🎉' : '失败 ‼️'}`;
+                    const content = [
+                        `写入[账号${userId}] Token、Sign ${writeResult ? '成功 🎉' : '失败 ‼️'}`,
+                        `账号ID: ${userId}`,
+                        `Token: ${tokenInfo.token}`,
+                        `Sign: ${tokenInfo.sign || '未获取到'}`,
+                        `已保存账号数: ${Object.keys(tokenData).length}`
+                    ].join('\n');
                     // $nobyda.notify('CityBox', '', content);
-                    await sendWxPusher('CityBox 获取用户 Token', content);
+                    await sendWxPusher(`CityBox 获取用户 Token：${userId}`, content);
                 } else {
-                    throw new Error('Cookie 中未获取到 token');
+                    throw new Error(`Cookie 中缺少信息,userID:${userId},token:${token}`);
                 }
             }
         }
@@ -390,8 +443,11 @@ async function GetCookie() {
             await GetCookie();
         } else if (cookiesData) {
             let cookies;
+            let legacyCookie = null;
             try {
-                cookies = typeof cookiesData === 'string' ? JSON.parse(cookiesData) : cookiesData;
+                const store = loadTokenStore(cookiesData);
+                cookies = store.data;
+                legacyCookie = store.legacy;
             } catch (e) {
                 throw new Error('Cookie 数据格式错误');
             }
@@ -400,13 +456,22 @@ async function GetCookie() {
             CONFIG.TIMEOUT = timeout;
             CONFIG.STOP_DELAY = delay;
             $nobyda.num = 0;
-            if (cookies && cookies.token) {
+            const tokenEntries = shuffleEntries(Object.entries(cookies || {}));
+            if (tokenEntries.length > 0 || legacyCookie?.token) {
                 const initWaitMs = Wait($nobyda.read("InitDelay") || CONFIG.INIT_DELAY);
                 console.log('CityBox 主流程将在 ' + initWaitMs + ' 毫秒后开始');
                 await wait(initWaitMs);
-                await all(cookies);
+                if (tokenEntries.length > 0) {
+                    for (const [userId, tokenValue] of tokenEntries) {
+                        const tokenInfo = normalizeTokenInfo(tokenValue);
+                        if (!tokenInfo.token) continue;
+                        await all({ userId, token: tokenInfo.token, sign: tokenInfo.sign });
+                    }
+                } else {
+                    await all({ userId: 'legacy', token: legacyCookie.token, sign: legacyCookie.sign });
+                }
             } else {
-                throw new Error('Cookie 中缺少 token');
+                throw new Error('Cookie 中缺少可执行的 token 信息');
             }
             $nobyda.time();
         } else {
