@@ -318,6 +318,17 @@ async function all(cookie) {
     }
 }
 
+function logGetUserInfoCapture(req, resp, body) {
+    const responseStatus = resp?.statusCode || resp?.status || '';
+    console.log('========== CityBox get_user_info 抓包日志 ==========');
+    console.log('请求 URL: ' + (req?.url || ''));
+    console.log('请求 Method: ' + (req?.method || ''));
+    console.log('请求 Headers: ' + JSON.stringify(req?.headers || {}, null, 2));
+    console.log('响应 Status: ' + responseStatus);
+    console.log('响应 Body: ' + (typeof body === 'string' ? body : JSON.stringify(body)));
+    console.log('========== CityBox get_user_info 抓包日志结束 ==========');
+}
+
 /**
  * 从响应/请求中获取 Cookie（Token）
  */
@@ -327,7 +338,7 @@ async function GetCookie() {
     if (!req || req.method === 'OPTIONS') return;
     try {
         const url = req.url || '';
-        let body = resp.body || '';
+        let body = resp?.body || '';
         let bodyData = null;
         if (body) {
             try {
@@ -339,6 +350,7 @@ async function GetCookie() {
         let token = req.headers?.token || req.headers?.Token || '';
         let sign = req.headers?.sign || req.headers?.Sign || '';
         if (/api\.icitybox\.cn\/api\/user\/get_user_info/.test(url)) {
+            logGetUserInfoCapture(req, resp, body);
             const hasUser = bodyData && (bodyData.id != null || bodyData.data?.id != null);
             if (hasUser || token) {
                 if (!token && bodyData?.data?.token) token = bodyData.data.token;
