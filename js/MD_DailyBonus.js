@@ -360,12 +360,17 @@ async function notify() {
             const afterMoney = merge.TotalMoney?.after || 0;
 
 
+            const moneyDiff = Number(afterMoney) - Number(beforeMoney);
+            const diffText = Number.isFinite(moneyDiff) && moneyDiff !== 0 ? `（${moneyDiff > 0 ? '+' : ''}${moneyDiff}）` : '';
+
             // 1. 标题行：余额变化
-            notifyLines.push(`毛豆充任务完成，账号：${USER || '未知'}，余额：${beforeMoney} -> ${afterMoney}`);
+            notifyLines.push('毛豆充任务完成');
+            notifyLines.push(`账号：${USER || '未知'}`);
+            notifyLines.push(`余额：${beforeMoney} -> ${afterMoney}${diffText}`);
 
             // 3. 签到结果
             if (merge.MaoDouSign && merge.MaoDouSign.notify) {
-                notifyLines.push(merge.MaoDouSign.notify);
+                notifyLines.push(`签到：${merge.MaoDouSign.notify.replace(/^毛豆充-签到/, '')}`);
             }
 
             // 2. 综合描述：任务概览（总次数、已成功、本次执行、本次成功/失败）
@@ -374,14 +379,14 @@ async function notify() {
             const taskExecPlanned = merge.TaskInfo?.execPlannedCount ?? 0;   // limit-now
             const taskSuccess = merge.MaoDouTask?.success || 0;              // 本次成功
             const taskFail = merge.MaoDouTask?.fail || 0;                    // 本次失败
-            notifyLines.push(`毛豆充-任务，总次数：${taskLimit}，已经成功${taskAlreadySuccess}次，本次执行${taskExecPlanned}次，成功${taskSuccess}次，失败${taskFail}次`);
+            notifyLines.push(`任务：总${taskLimit}次，已成功${taskAlreadySuccess}次，本次执行${taskExecPlanned}次，成功${taskSuccess}次，失败${taskFail}次`);
 
 
             // 4. 抽奖汇总
             const totalPoints = merge.DrawInfo?.points ?? 0;
             const drawSuccess = merge.MaoDouDraw?.success || 0;
             const drawFail = merge.MaoDouDraw?.fail || 0;
-            notifyLines.push(`毛豆充-抽奖，总积分：${totalPoints}，成功抽奖${drawSuccess}次${drawFail > 0 ? `，失败${drawFail}次` : ''}`);
+            notifyLines.push(`抽奖：总积分${totalPoints}，成功${drawSuccess}次，失败${drawFail}次`);
 
             // 5. 失败详情（如有），逐行追加
             const failDetails = [];
@@ -392,6 +397,7 @@ async function notify() {
                 failDetails.push(...merge.MaoDouDraw.failDetail);
             }
             if (failDetails.length > 0) {
+                notifyLines.push('失败详情：');
                 notifyLines.push(...failDetails);
             }
 
@@ -768,10 +774,10 @@ async function GetCookie() {
                 const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'Cookies');
                 console.log('获取用户token成功: ' + JSON.stringify(tokenData));
                 const content = [
-                    `写入[账号${userId}] Token ${writeResult ? '成功 🎉' : '失败 ‼️'}`,
                     `账号ID: ${userId}`,
+                    `状态: Token 写入${writeResult ? '成功 🎉' : '失败 ‼️'}`,
                     `Token: ${token}`,
-                    `已保存账号数: ${Object.keys(tokenData).length}`
+                    `已保存: ${Object.keys(tokenData).length} 个账号`
                 ].join('\n');
                 // $nobyda.notify(`用户名: ${userId}`, '', content);
                 await sendWxPusher(`毛豆充获取用户 Token：${userId}`, content);

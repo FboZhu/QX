@@ -313,14 +313,19 @@ async function notify() {
             const lines = [];
             const beforeMoney = merge.TotalMoney?.before ?? 0;
             const afterMoney = merge.TotalMoney?.after ?? 0;
-            lines.push(`CityBox任务完成，账号：${USER || '未知'}，余额：${beforeMoney} -> ${afterMoney}`);
+            const moneyDiff = Number(afterMoney) - Number(beforeMoney);
+            const diffText = Number.isFinite(moneyDiff) && moneyDiff !== 0 ? `（${moneyDiff > 0 ? '+' : ''}${moneyDiff}）` : '';
+            lines.push('CityBox 任务完成');
+            lines.push(`账号：${USER || '未知'}`);
+            lines.push(`余额：${beforeMoney} -> ${afterMoney}${diffText}`);
             if (merge.CityBoxSign && merge.CityBoxSign.notify) {
-                lines.push(merge.CityBoxSign.notify);
+                lines.push(`签到：${merge.CityBoxSign.notify.replace(/^CityBox-签到/, '')}`);
             }
             const success = merge.CityBoxTask?.success ?? 0;
             const fail = merge.CityBoxTask?.fail ?? 0;
-            lines.push(`CityBox-任务(draw_results)：成功${success}次，失败${fail}次`);
+            lines.push(`任务：draw_results 成功${success}次，失败${fail}次`);
             if (merge.CityBoxTask?.failDetail?.length) {
+                lines.push('失败详情：');
                 lines.push(...merge.CityBoxTask.failDetail);
             }
             if (shouldSkip()) {
@@ -415,11 +420,11 @@ async function GetCookie() {
                     const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'MHCityBoxCookies');
                     console.log('CityBox 获取 token/sign 成功: ' + JSON.stringify(tokenData));
                     const content = [
-                        `写入[账号${userId}] Token、Sign ${writeResult ? '成功 🎉' : '失败 ‼️'}`,
                         `账号ID: ${userId}`,
+                        `状态: Token、Sign 写入${writeResult ? '成功 🎉' : '失败 ‼️'}`,
                         `Token: ${tokenInfo.token}`,
                         `Sign: ${tokenInfo.sign || '未获取到'}`,
-                        `已保存账号数: ${Object.keys(tokenData).length}`
+                        `已保存: ${Object.keys(tokenData).length} 个账号`
                     ].join('\n');
                     // $nobyda.notify('CityBox', '', content);
                     await sendWxPusher(`CityBox 获取用户 Token：${userId}`, content);
