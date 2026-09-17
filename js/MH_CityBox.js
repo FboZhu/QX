@@ -65,7 +65,74 @@ const DEFAULT_HEADERS = {
 let $nobyda = nobyda();
 let merge = {};
 let KEY = '';
+let USER = '';
 let SIGN = '';  // 与 token 一起从 get_user_info 请求头缓存
+
+function isLegacyTokenData(data) {
+    return !!(data && typeof data === 'object' && !Array.isArray(data) && Object.prototype.hasOwnProperty.call(data, 'token'));
+}
+
+function normalizeTokenInfo(value) {
+    if (typeof value === 'string') {
+        return { token: value, sign: '' };
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return {
+            token: value.token ? String(value.token) : '',
+            sign: value.sign ? String(value.sign) : ''
+        };
+    }
+    return { token: '', sign: '' };
+}
+
+function migrateTokenData(data) {
+    if (isLegacyTokenData(data)) {
+        const userId = data.userId || data.id || data.uid || 'default';
+        const tokenInfo = normalizeTokenInfo(data);
+        return tokenInfo.token ? { [String(userId)]: tokenInfo } : {};
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return {};
+    return Object.keys(data).reduce((result, userId) => {
+        const tokenInfo = normalizeTokenInfo(data[userId]);
+        if (tokenInfo.token) result[String(userId)] = tokenInfo;
+        return result;
+    }, {});
+}
+
+function parseTokenStore(rawData) {
+    if (typeof rawData === 'string') {
+        return JSON.parse(rawData);
+    }
+    return rawData;
+}
+
+function loadTokenStore(rawData) {
+    const data = parseTokenStore(rawData);
+    if (isLegacyTokenData(data)) {
+        return { data: migrateTokenData(data), migrated: true };
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return { data: {}, migrated: false };
+    }
+    return { data: migrateTokenData(data), migrated: false };
+}
+
+function shuffleEntries(entries) {
+    const list = Array.isArray(entries) ? [...entries] : [];
+    for (let i = list.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+}
+
+function getResponseUser(bodyData) {
+    const data = bodyData?.data || bodyData || {};
+    return {
+        userId: data.id || data.userId || data.user_id || data.uid || bodyData?.id || '',
+        name: data.nickname || data.nickName || data.name || data.username || data.phone || data.mobile || ''
+    };
+}
 
 function shouldSkip() {
     return CONFIG.SKIP === true;
@@ -260,7 +327,7 @@ async function notify() {
             const lines = [];
             const beforeMoney = merge.TotalMoney?.before ?? 0;
             const afterMoney = merge.TotalMoney?.after ?? 0;
-            lines.push(`CityBox任务完成，余额：${beforeMoney} -> ${afterMoney}`);
+            lines.push(`CityBox任务完成，账号：${USER || '未知'}，余额：${beforeMoney} -> ${afterMoney}`);
             if (merge.CityBoxSign && merge.CityBoxSign.notify) {
                 lines.push(merge.CityBoxSign.notify);
             }
@@ -289,7 +356,9 @@ async function notify() {
  */
 async function all(cookie) {
     try {
+        CONFIG.SKIP = false;
         KEY = cookie.token;
+        USER = cookie.userId || '';
         SIGN = cookie.sign || API_CONFIG.SIGN;
         merge = {};
         $nobyda.num++;
@@ -339,27 +408,50 @@ async function GetCookie() {
         let token = req.headers?.token || req.headers?.Token || '';
         let sign = req.headers?.sign || req.headers?.Sign || '';
         if (/api\.icitybox\.cn\/api\/user\/get_user_info/.test(url)) {
-            const hasUser = bodyData && (bodyData.id != null || bodyData.data?.id != null);
-            if (hasUser || token) {
+            const userInfo = getResponseUser(bodyData);
+            const userId = userInfo.userId ? String(userInfo.userId) : '';
+            if (userId || token) {
                 if (!token && bodyData?.data?.token) token = bodyData.data.token;
                 if (!sign && bodyData?.data?.sign) sign = bodyData.data.sign;
-                if (token) {
-                    let existedRaw = $nobyda.read('MHCityBoxCookies');
-                    let existed = null;
+                if (userId && token) {
+                    let existed = {};
+                    let migrated = false;
                     try {
-                        existed = typeof existedRaw === 'string' ? JSON.parse(existedRaw) : existedRaw;
+                        const store = loadTokenStore($nobyda.read('MHCityBoxCookies'));
+                        existed = store.data;
+                        migrated = store.migrated;
                     } catch (e) {
-                        existed = null;
+                        existed = {};
                     }
-                    if (existed && existed.token === token && existed.sign === sign) return;
-                    const tokenData = { token, sign: sign || existed?.sign || '' };
+
+                    if (migrated) {
+                        const migrateResult = $nobyda.write(JSON.stringify(existed, null, 2), 'MHCityBoxCookies');
+                        console.log('CityBox 旧格式Cookies已迁移: ' + JSON.stringify(existed));
+                        if (!migrateResult) {
+                            console.log('CityBox 旧格式Cookies迁移失败');
+                        }
+                    }
+
+                    const existedInfo = normalizeTokenInfo(existed[String(userId)]);
+                    const nextInfo = { token, sign: sign || existedInfo.sign || '' };
+                    if (existedInfo.token === nextInfo.token && existedInfo.sign === nextInfo.sign) return;
+
+                    const tokenData = { ...existed, [String(userId)]: nextInfo };
                     const writeResult = $nobyda.write(JSON.stringify(tokenData, null, 2), 'MHCityBoxCookies');
                     console.log('CityBox 获取 token/sign 成功: ' + JSON.stringify(tokenData));
-                    const content = `写入 Token${sign ? '、Sign' : ''} ${writeResult ? '成功 🎉' : '失败 ‼️'}`;
+                    const savedCount = Object.keys(tokenData).length;
+                    const content = [
+                        `写入[账号${userId}] Token${nextInfo.sign ? '、Sign' : ''} ${writeResult ? '成功 🎉' : '失败 ‼️'}`,
+                        userInfo.name ? `账号名称: ${userInfo.name}` : '',
+                        `账号ID: ${userId}`,
+                        `Token: ${nextInfo.token}`,
+                        `Sign: ${nextInfo.sign || '未获取到'}`,
+                        `已保存账号数: ${savedCount}`
+                    ].filter(Boolean).join('\n');
                     // $nobyda.notify('CityBox', '', content);
-                    await sendWxPusher('CityBox 获取用户 Token', content);
+                    await sendWxPusher(`CityBox 获取用户 Token：${userId}`, content);
                 } else {
-                    throw new Error('Cookie 中未获取到 token');
+                    throw new Error(`Cookie 中缺少信息,userID:${userId},token:${token}`);
                 }
             }
         }
@@ -379,7 +471,15 @@ async function GetCookie() {
         } else if (cookiesData) {
             let cookies;
             try {
-                cookies = typeof cookiesData === 'string' ? JSON.parse(cookiesData) : cookiesData;
+                const store = loadTokenStore(cookiesData);
+                cookies = store.data;
+                if (store.migrated) {
+                    const migrateResult = $nobyda.write(JSON.stringify(cookies, null, 2), 'MHCityBoxCookies');
+                    console.log('CityBox 旧格式Cookies已迁移: ' + JSON.stringify(cookies));
+                    if (!migrateResult) {
+                        throw new Error('旧格式Cookies迁移失败');
+                    }
+                }
             } catch (e) {
                 throw new Error('Cookie 数据格式错误');
             }
@@ -388,13 +488,18 @@ async function GetCookie() {
             CONFIG.TIMEOUT = timeout;
             CONFIG.STOP_DELAY = delay;
             $nobyda.num = 0;
-            if (cookies && cookies.token) {
+            const tokenEntries = shuffleEntries(Object.entries(cookies || {}));
+            if (tokenEntries.length > 0) {
                 const initWaitMs = Wait($nobyda.read("InitDelay") || CONFIG.INIT_DELAY);
                 console.log('CityBox 主流程将在 ' + initWaitMs + ' 毫秒后开始');
                 await wait(initWaitMs);
-                await all(cookies);
+                for (const [userId, tokenValue] of tokenEntries) {
+                    const tokenInfo = normalizeTokenInfo(tokenValue);
+                    if (!tokenInfo.token) continue;
+                    await all({ userId, token: tokenInfo.token, sign: tokenInfo.sign });
+                }
             } else {
-                throw new Error('Cookie 中缺少 token');
+                throw new Error('Cookie 中缺少可执行的 token 信息');
             }
             $nobyda.time();
         } else {
