@@ -22,6 +22,7 @@ const CONFIG = {
     TIMEOUT: 0,
     MIN_WAIT_TIME: 2000,  // 接口间最小等待(毫秒)
     MAX_WAIT_TIME: 5000,  // 接口间最大等待(毫秒)
+    MAX_CONCURRENCY: 3, // 多账号最大并行数
     SKIP: false
 };
 
@@ -63,19 +64,6 @@ const DEFAULT_HEADERS = {
 };
 
 let $nobyda = nobyda();
-let merge = {};
-let KEY = '';
-let USER = '';
-let SIGN = '';  // 与 token 一起从 get_user_info 请求头缓存
-
-function parseJsonData(rawData) {
-    if (!rawData) return null;
-    if (typeof rawData === 'string') {
-        return JSON.parse(rawData);
-    }
-    return rawData;
-}
-
 function getPayload(result) {
     return result?.body || result?.data || result || {};
 }
@@ -85,37 +73,12 @@ function getUserIdFromUserInfo(bodyData) {
     return payload?.id != null ? String(payload.id) : '';
 }
 
-function isLegacyTokenData(data) {
-    return !!(data && typeof data === 'object' && !Array.isArray(data) && Object.prototype.hasOwnProperty.call(data, 'token'));
-}
-
-function normalizeTokenInfo(value) {
-    if (typeof value === 'string') return { token: value, sign: '' };
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-        return {
-            token: value.token ? String(value.token) : '',
-            sign: value.sign ? String(value.sign) : ''
-        };
-    }
-    return { token: '', sign: '' };
-}
-
 function loadTokenStore(rawData) {
-    const data = parseJsonData(rawData);
+    const data = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
-        return { data: {}, legacy: null };
+        throw new Error('Cookie 数据格式错误');
     }
-    if (isLegacyTokenData(data)) {
-        return { data: {}, legacy: normalizeTokenInfo(data) };
-    }
-    return {
-        data: Object.keys(data).reduce((result, userId) => {
-            const tokenInfo = normalizeTokenInfo(data[userId]);
-            if (tokenInfo.token) result[String(userId)] = tokenInfo;
-            return result;
-        }, {}),
-        legacy: null
-    };
+    return data;
 }
 
 function shuffleEntries(entries) {
@@ -127,8 +90,24 @@ function shuffleEntries(entries) {
     return list;
 }
 
-function shouldSkip() {
-    return CONFIG.SKIP === true;
+async function runWithConcurrency(items, worker, limit) {
+    // 使用固定数量的 worker，保持多账号并行，同时避免一次发起过多请求
+    let nextIndex = 0;
+    const workerCount = Math.min(Math.max(1, limit), items.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+        while (nextIndex < items.length) {
+            const item = items[nextIndex++];
+            await worker(item);
+        }
+    }));
+}
+
+function shouldSkip(ctx) {
+    return ctx.skip;
+}
+
+function markExecutionFailure(ctx) {
+    ctx.merge.EXECUTION_FAILED = true;
 }
 
 function getRandomWaitTime(minTime = CONFIG.MIN_WAIT_TIME) {
@@ -154,23 +133,28 @@ function Wait(readDelay, isInit = false) {
 /**
  * 获取用户信息
  */
-function UserInfo(name) {
+function UserInfo(name, ctx) {
+    const { merge } = ctx;
     merge.TotalMoney = merge.TotalMoney || {};
     merge.CityBoxUserInfo = {};
     return new Promise(resolve => {
-        if (shouldSkip()) {
+        let timeoutTimer;
+        let timedOut = false; // 超时后忽略迟到的请求回调
+        if (shouldSkip(ctx)) {
             resolve();
             return;
         }
         const opts = {
             url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.USER_INFO}`,
             headers: {
-                token: KEY,
-                sign: SIGN,
+                token: ctx.key,
+                sign: ctx.sign,
                 ...DEFAULT_HEADERS
             }
         };
         $nobyda.get(opts, (error, response, data) => {
+            if (timedOut) return;
+            if (timeoutTimer) clearTimeout(timeoutTimer);
             try {
                 if (error) throw new Error(error);
                 const result = JSON.parse(data);
@@ -192,22 +176,30 @@ function UserInfo(name) {
                     }
                 }
             } catch (e) {
-                $nobyda.AnError("用户信息-查询", "CityBoxUserInfo", e, response, data);
+                markExecutionFailure(ctx);
+                $nobyda.AnError("用户信息-查询", "CityBoxUserInfo", e, response, data, ctx);
             } finally {
                 resolve();
             }
         });
-        if (CONFIG.TIMEOUT) setTimeout(resolve, CONFIG.TIMEOUT);
+        if (CONFIG.TIMEOUT) timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            markExecutionFailure(ctx);
+            resolve();
+        }, CONFIG.TIMEOUT);
     });
 }
 
 /**
  * 签到
  */
-function CityBoxSign(delay) {
+function CityBoxSign(delay, ctx) {
+    const { merge } = ctx;
     merge.CityBoxSign = {};
     return new Promise(resolve => {
-        if (shouldSkip()) {
+        let timeoutTimer;
+        let timedOut = false;
+        if (shouldSkip(ctx)) {
             resolve();
             return;
         }
@@ -217,11 +209,13 @@ function CityBoxSign(delay) {
             $nobyda.get({
                 url,
                 headers: {
-                    token: KEY,
-                    sign: SIGN,
+                    token: ctx.key,
+                    sign: ctx.sign,
                     ...DEFAULT_HEADERS
                 }
             }, (error, response, data) => {
+                if (timedOut) return;
+                if (timeoutTimer) clearTimeout(timeoutTimer);
                 try {
                     if (error) throw new Error(error);
                     const result = JSON.parse(data);
@@ -236,23 +230,31 @@ function CityBoxSign(delay) {
                         merge.CityBoxSign.success = 1;
                     }
                 } catch (e) {
-                    $nobyda.AnError("CityBox-签到", "CityBoxSign", e, response, data);
+                    markExecutionFailure(ctx);
+                    $nobyda.AnError("CityBox-签到", "CityBoxSign", e, response, data, ctx);
                 } finally {
                     resolve();
                 }
             });
         }, delay);
-        if (CONFIG.TIMEOUT) setTimeout(resolve, CONFIG.TIMEOUT + delay);
+        if (CONFIG.TIMEOUT) timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            markExecutionFailure(ctx);
+            resolve();
+        }, CONFIG.TIMEOUT + delay);
     });
 }
 
 /**
  * 任务（转盘/抽奖）click_num 为 1～9 的随机数
  */
-function DrawResults(delay, clickNum) {
+function DrawResults(delay, clickNum, ctx) {
+    const { merge } = ctx;
     merge.CityBoxTask = merge.CityBoxTask || { success: 0, fail: 0 };
     return new Promise(resolve => {
-        if (shouldSkip()) {
+        let timeoutTimer;
+        let timedOut = false;
+        if (shouldSkip(ctx)) {
             resolve();
             return;
         }
@@ -260,12 +262,14 @@ function DrawResults(delay, clickNum) {
             $nobyda.post({
                 url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.DRAW_RESULTS}`,
                 headers: {
-                    token: KEY,
-                    sign: SIGN,
+                    token: ctx.key,
+                    sign: ctx.sign,
                     ...DEFAULT_HEADERS
                 },
                 body: `click_num=${clickNum}`
             }, (error, response, data) => {
+                if (timedOut) return;
+                if (timeoutTimer) clearTimeout(timeoutTimer);
                 try {
                     if (error) throw new Error(error);
                     const result = JSON.parse(data);
@@ -278,13 +282,18 @@ function DrawResults(delay, clickNum) {
                         merge.CityBoxTask.success = (merge.CityBoxTask.success || 0) + 1;
                     }
                 } catch (e) {
-                    $nobyda.AnError("CityBox-任务", "CityBoxTask", e, response, data);
+                    markExecutionFailure(ctx);
+                    $nobyda.AnError("CityBox-任务", "CityBoxTask", e, response, data, ctx);
                 } finally {
                     resolve();
                 }
             });
         }, delay);
-        if (CONFIG.TIMEOUT) setTimeout(resolve, CONFIG.TIMEOUT + delay);
+        if (CONFIG.TIMEOUT) timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            markExecutionFailure(ctx);
+            resolve();
+        }, CONFIG.TIMEOUT + delay);
     });
 }
 
@@ -308,7 +317,8 @@ async function sendWxPusher(summary, content) {
     }
 }
 
-async function notify() {
+async function notify(ctx) {
+    const { merge } = ctx;
     try {
             const lines = [];
             const beforeMoney = merge.TotalMoney?.before ?? 0;
@@ -316,7 +326,7 @@ async function notify() {
             const moneyDiff = Number(afterMoney) - Number(beforeMoney);
             const diffText = Number.isFinite(moneyDiff) && moneyDiff !== 0 ? `（${moneyDiff > 0 ? '+' : ''}${moneyDiff}）` : '';
             lines.push('CityBox 任务完成');
-            lines.push(`账号：${USER || '未知'}`);
+            lines.push(`账号：${ctx.user || '未知'}`);
             lines.push(`余额：${beforeMoney} -> ${afterMoney}${diffText}`);
             if (merge.CityBoxSign && merge.CityBoxSign.notify) {
                 lines.push(`签到：${merge.CityBoxSign.notify.replace(/^CityBox-签到/, '')}`);
@@ -328,36 +338,42 @@ async function notify() {
                 lines.push('失败详情：');
                 lines.push(...merge.CityBoxTask.failDetail);
             }
-            if (shouldSkip()) {
+            if (shouldSkip(ctx)) {
                 lines.unshift('⚠️ 检测到Token失效，已跳过后续操作');
             }
-        const content = lines.join('\n');
+        const hasFailure = shouldSkip(ctx)
+            || merge.EXECUTION_FAILED
+            || merge.CityBoxUserInfo?.fail
+            || merge.CityBoxSign?.fail
+            || fail > 0;
+        const content = hasFailure ? lines.join('\n') : [
+            `账号：${ctx.user || '未知'}`,
+            `余额：${beforeMoney} -> ${afterMoney}${diffText}`,
+            `签到：${merge.CityBoxSign?.notify?.replace(/^CityBox-签到/, '') || '成功'}`,
+            `任务：成功${success}次，失败${fail}次`
+        ].join('\n');
+        const title = `CityBox执行${hasFailure ? '失败' : '成功'}`;
         console.log(content);
         // $nobyda.notify('', '', content);
-        await sendWxPusher('CityBox 执行通知', content);
+        await sendWxPusher(title, content);
     } catch (e) {
         const content = e.message || String(e);
         // $nobyda.notify('通知模块 ' + e.name + '‼️', '', content);
-        await sendWxPusher('CityBox 执行通知', content);
+        await sendWxPusher('CityBox执行失败', content);
     }
 }
 
 /**
- * 主流程：用户信息 -> 等待 -> 签到 -> 等待 -> 任务1 -> 等待 -> 任务2 -> 等待 -> 用户信息 -> 通知
+ * 主流程：用户信息 -> 等待 ->（签到 / 任务随机开始）-> 用户信息 -> 通知
  */
 async function all(cookie) {
+    // 每个账号独立保存 token、跳过状态和执行结果，确保并行执行互不影响
+    const ctx = { key: cookie.token, user: cookie.userId || '', sign: cookie.sign || API_CONFIG.SIGN, merge: {}, skip: false };
     try {
-        CONFIG.SKIP = false;
-        KEY = cookie.token;
-        USER = cookie.userId || '';
-        SIGN = cookie.sign || API_CONFIG.SIGN;
-        merge = {};
+        const { merge } = ctx;
         $nobyda.num++;
 
-        await UserInfo("before");
-        await wait(getRandomWaitTime());
-
-        await CityBoxSign(Wait(CONFIG.STOP_DELAY));
+        await UserInfo("before", ctx);
         await wait(getRandomWaitTime());
 
         const clickNum1 = Math.floor(Math.random() * 9) + 1;
@@ -365,16 +381,30 @@ async function all(cookie) {
         while (clickNum2 === clickNum1) {
             clickNum2 = Math.floor(Math.random() * 9) + 1;
         }
-        await DrawResults(0, clickNum1);
-        await wait(getRandomWaitTime());
 
-        await DrawResults(0, clickNum2);
-        await wait(getRandomWaitTime());
+        // 随机决定签到和任务的先后，任务内部仍按两个抽奖请求的顺序执行
+        const actions = shuffleEntries([
+            async () => {
+                await CityBoxSign(Wait(CONFIG.STOP_DELAY), ctx);
+            },
+            async () => {
+                await DrawResults(0, clickNum1, ctx);
+                await wait(getRandomWaitTime());
+                await DrawResults(0, clickNum2, ctx);
+            }
+        ]);
 
-        await UserInfo("after");
-        await notify();
+        for (const action of actions) {
+            await action();
+            await wait(getRandomWaitTime());
+        }
+
+        await UserInfo("after", ctx);
+        await notify(ctx);
     } catch (error) {
-        $nobyda.AnError("主执行流程", "all", error);
+        markExecutionFailure(ctx);
+        $nobyda.AnError("主执行流程", "all", error, null, null, ctx);
+        await sendWxPusher('CityBox执行失败', error?.message || String(error));
     }
 }
 
@@ -391,7 +421,7 @@ async function GetCookie() {
         let bodyData = null;
         if (body) {
             try {
-                bodyData = parseJsonData(body);
+                bodyData = typeof body === 'string' ? JSON.parse(body) : body;
             } catch (e) {
                 bodyData = null;
             }
@@ -407,12 +437,11 @@ async function GetCookie() {
                 if (userId && token) {
                     let existed = {};
                     try {
-                        const store = loadTokenStore($nobyda.read('MHCityBoxCookies'));
-                        existed = store.data;
+                        existed = loadTokenStore($nobyda.read('MHCityBoxCookies'));
                     } catch (e) {
                         existed = {};
                     }
-                    const existedInfo = normalizeTokenInfo(existed[userId]);
+                    const existedInfo = existed[userId] || {};
                     const tokenInfo = { token, sign: sign || existedInfo.sign || '' };
                     if (existedInfo.token === tokenInfo.token && existedInfo.sign === tokenInfo.sign) return;
 
@@ -427,7 +456,7 @@ async function GetCookie() {
                         `已保存: ${Object.keys(tokenData).length} 个账号`
                     ].join('\n');
                     // $nobyda.notify('CityBox', '', content);
-                    await sendWxPusher(`CityBox 获取用户 Token：${userId}`, content);
+                    await sendWxPusher(writeResult ? 'CityBox获取用户成功' : 'CityBox获取用户失败', content);
                 } else {
                     throw new Error(`Cookie 中缺少信息,userID:${userId},token:${token}`);
                 }
@@ -436,7 +465,7 @@ async function GetCookie() {
     } catch (e) {
         const content = e?.message || String(e);
         // $nobyda.notify('GetCookie', '', content);
-        await sendWxPusher('CityBox 获取用户 Token 失败', content);
+        await sendWxPusher('CityBox获取用户失败', content);
     }
 }
 
@@ -448,11 +477,8 @@ async function GetCookie() {
             await GetCookie();
         } else if (cookiesData) {
             let cookies;
-            let legacyCookie = null;
             try {
-                const store = loadTokenStore(cookiesData);
-                cookies = store.data;
-                legacyCookie = store.legacy;
+                cookies = loadTokenStore(cookiesData);
             } catch (e) {
                 throw new Error('Cookie 数据格式错误');
             }
@@ -462,19 +488,15 @@ async function GetCookie() {
             CONFIG.STOP_DELAY = delay;
             $nobyda.num = 0;
             const tokenEntries = shuffleEntries(Object.entries(cookies || {}));
-            if (tokenEntries.length > 0 || legacyCookie?.token) {
-                const initWaitMs = Wait($nobyda.read("InitDelay") || CONFIG.INIT_DELAY);
-                console.log('CityBox 主流程将在 ' + initWaitMs + ' 毫秒后开始');
-                await wait(initWaitMs);
-                if (tokenEntries.length > 0) {
-                    for (const [userId, tokenValue] of tokenEntries) {
-                        const tokenInfo = normalizeTokenInfo(tokenValue);
-                        if (!tokenInfo.token) continue;
-                        await all({ userId, token: tokenInfo.token, sign: tokenInfo.sign });
-                    }
-                } else {
-                    await all({ userId: 'legacy', token: legacyCookie.token, sign: legacyCookie.sign });
-                }
+            if (tokenEntries.length > 0) {
+                const initDelay = $nobyda.read("InitDelay") || CONFIG.INIT_DELAY;
+                await runWithConcurrency(tokenEntries, async ([userId, tokenValue]) => {
+                    if (!tokenValue || !tokenValue.token) return Promise.resolve();
+                    const initWaitMs = Wait(initDelay);
+                    console.log(`CityBox账号 ${userId} 将在 ${initWaitMs} 毫秒后开始`);
+                    await wait(initWaitMs);
+                    return all({ userId, token: tokenValue.token, sign: tokenValue.sign });
+                }, CONFIG.MAX_CONCURRENCY);
             } else {
                 throw new Error('Cookie 中缺少可执行的 token 信息');
             }
@@ -632,11 +654,13 @@ function nobyda() {
         }
     };
 
-    const AnError = (name, keyname, error, resp, body) => {
-        if (typeof merge !== "undefined" && keyname) {
-            if (!merge[keyname].notify) merge[keyname].notify = `${name}: 异常, 已输出日志 ‼️`;
-            else merge[keyname].notify += `\n${name}: 异常 ‼️`;
-            merge[keyname].error = 1;
+    const AnError = (name, keyname, error, resp, body, context) => {
+        const targetMerge = context?.merge;
+        if (targetMerge && keyname) {
+            targetMerge[keyname] = targetMerge[keyname] || {};
+            if (!targetMerge[keyname].notify) targetMerge[keyname].notify = `${name}: 异常, 已输出日志 ‼️`;
+            else targetMerge[keyname].notify += `\n${name}: 异常 ‼️`;
+            targetMerge[keyname].error = 1;
         }
     };
 

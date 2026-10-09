@@ -22,6 +22,7 @@ const CONFIG = {
     TIMEOUT: 0, // 接口超时退出，0则关闭
     MIN_WAIT_TIME: 5000, // 最小等待时间
     MAX_WAIT_TIME: 10000, // 最大等待时间
+    MAX_CONCURRENCY: 3, // 多账号最大并行数
     SKIP: false
 };
 
@@ -62,38 +63,12 @@ const DEFAULT_HEADERS = {
 
 // 全局变量
 let $nobyda = nobyda();
-let merge = {};
-let KEY = '';
-let USER = 0;
-
-function isLegacyTokenData(data) {
-    return !!(data && typeof data === 'object' && !Array.isArray(data) && Object.prototype.hasOwnProperty.call(data, 'userId') && Object.prototype.hasOwnProperty.call(data, 'token'));
-}
-
-function migrateTokenData(data) {
-    if (isLegacyTokenData(data)) {
-        return data.userId && data.token ? { [String(data.userId)]: String(data.token) } : {};
-    }
-    return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
-}
-
-function parseTokenStore(rawData) {
-    if (typeof rawData === 'string') {
-        return JSON.parse(rawData);
-    }
-    return rawData;
-}
-
 function loadTokenStore(rawData) {
-    const data = parseTokenStore(rawData);
-    if (isLegacyTokenData(data)) {
-        const migrated = migrateTokenData(data);
-        return { data: migrated, migrated: true };
-    }
+    const data = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
-        return { data: {}, migrated: false };
+        throw new Error('Cookie数据格式错误');
     }
-    return { data, migrated: false };
+    return data;
 }
 
 function shuffleEntries(entries) {
@@ -105,53 +80,83 @@ function shuffleEntries(entries) {
     return list;
 }
 
+async function runWithConcurrency(items, worker, limit) {
+    // 使用固定数量的 worker，保持多账号并行，同时避免一次发起过多请求
+    let nextIndex = 0;
+    const workerCount = Math.min(Math.max(1, limit), items.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+        while (nextIndex < items.length) {
+            const item = items[nextIndex++];
+            await worker(item);
+        }
+    }));
+}
+
 /**
  * 检查是否需要跳过执行
  */
-function shouldSkip() {
+function shouldSkip(ctx) {
     // 检查CONFIG.SKIP是否为true
-    return CONFIG.SKIP === true;
+    return ctx.skip;
+}
+
+function markExecutionFailure(ctx) {
+    ctx.merge.EXECUTION_FAILED = true;
 }
 
 /**
  * 主执行函数
  */
 async function all(cookie) {
+    // 每个账号独立保存 token、跳过状态和执行结果，确保并行执行互不影响
+    const ctx = { key: cookie.token, user: cookie.userId, merge: {}, skip: false };
     try {
-        CONFIG.SKIP = false;
-        KEY = cookie.token;
-        USER = cookie.userId;
-        merge = {};
+        const { merge } = ctx;
         $nobyda.num++;
 
-        // 执行签到流程
-        await UserInfo("before");
-        await MaoDouSign(0);
+        // 签到和任务随机执行，抽奖固定最后执行
+        await UserInfo("before", ctx);
 
-        // 重置任务完成标记
-        merge.TASK_COMPLETED = false;
-        await randomDelayTask(Wait(CONFIG.STOP_DELAY));
+        // 随机决定签到和任务的先后，抽奖在两者完成后固定执行
+        const signAndTaskActions = shuffleEntries([
+            async () => {
+                await MaoDouSign(0, ctx);
+            },
+            async () => {
+                merge.TASK_COMPLETED = false;
+                await randomDelayTask(Wait(CONFIG.STOP_DELAY), ctx);
+            }
+        ]);
+        for (const action of signAndTaskActions) {
+            await action();
+            await new Promise(resolve => setTimeout(resolve, getRandomWaitTime()));
+        }
 
-        // 重置抽奖积分不足标记
+        // 抽奖固定最后执行
         merge.DRAW_INSUFFICIENT = false;
-        await randomDelayDraw(Wait(CONFIG.STOP_DELAY));
+        await randomDelayDraw(Wait(CONFIG.STOP_DELAY), ctx);
 
-        await UserInfo("after");
-        await notify();
+        await UserInfo("after", ctx);
+        await notify(ctx);
     } catch (error) {
-        $nobyda.AnError("主执行流程", "all", error);
+        markExecutionFailure(ctx);
+        $nobyda.AnError("主执行流程", "all", error, null, null, ctx);
+        await sendWxPusher('毛豆充执行失败', error?.message || String(error));
     }
 }
 
 /**
  * 用户信息查询
  */
-function UserInfo(name) {
+function UserInfo(name, ctx) {
+    const { merge } = ctx;
     merge.TotalMoney = merge.TotalMoney || {};
     merge.MaoDouUserInfo = {}
     return new Promise(resolve => {
+        let timeoutTimer;
+        let timedOut = false; // 超时后忽略迟到的请求回调
         // 检查是否需要跳过
-        if (shouldSkip()) {
+        if (shouldSkip(ctx)) {
             resolve();
             return;
         }
@@ -159,10 +164,12 @@ function UserInfo(name) {
         $nobyda.get({
             url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.USER_INFO}`,
             headers: {
-                token: KEY,
+                token: ctx.key,
                 ...DEFAULT_HEADERS
             }
         }, (error, response, data) => {
+            if (timedOut) return;
+            if (timeoutTimer) clearTimeout(timeoutTimer);
             try {
                 if (error) throw new Error(error);
                 const result = JSON.parse(data);
@@ -171,7 +178,7 @@ function UserInfo(name) {
                     merge.MaoDouUserInfo.notify = `毛豆充-查询成功，余额${result.data.globalPoints}`;
                     merge.MaoDouUserInfo.success = 1;
                 } else if (result.code === 2004) {
-                    CONFIG.SKIP = true;
+                    ctx.skip = true;
                     merge.MaoDouUserInfo.notify = "毛豆充-查询失败, 原因: Token失效‼️";
                     merge.MaoDouUserInfo.fail = 1;
                 } else {
@@ -179,23 +186,31 @@ function UserInfo(name) {
                     merge.MaoDouUserInfo.fail = 1;
                 }
             } catch (error) {
-                $nobyda.AnError("账户现金-查询", "TotalMoney", error, response, data);
+                markExecutionFailure(ctx);
+                $nobyda.AnError("账户现金-查询", "TotalMoney", error, response, data, ctx);
             } finally {
                 resolve();
             }
         });
 
-        if (CONFIG.TIMEOUT) setTimeout(resolve, CONFIG.TIMEOUT);
+        if (CONFIG.TIMEOUT) timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            markExecutionFailure(ctx);
+            resolve();
+        }, CONFIG.TIMEOUT);
     });
 }
 
 /**
  * 获取任务列表并计算循环次数
  */
-function getWelfareTaskList() {
+function getWelfareTaskList(ctx) {
+    const { merge } = ctx;
     return new Promise(resolve => {
+        let timeoutTimer;
+        let timedOut = false;
         // 检查是否需要跳过
-        if (shouldSkip()) {
+        if (shouldSkip(ctx)) {
             resolve(0);
             return;
         }
@@ -203,13 +218,15 @@ function getWelfareTaskList() {
         $nobyda.post({
             url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.WELFARE_TASK_LIST}`,
             headers: {
-                token: KEY,
+                token: ctx.key,
                 ...DEFAULT_HEADERS
             },
             body: JSON.stringify({
-                userId: USER
+                userId: ctx.user
             })
         }, (error, response, data) => {
+            if (timedOut) return;
+            if (timeoutTimer) clearTimeout(timeoutTimer);
             try {
                 if (error) throw new Error(error);
                 const result = JSON.parse(data);
@@ -242,18 +259,23 @@ function getWelfareTaskList() {
                         resolve(0);
                     }
                 } else if (result.code === 2004) {
-                    CONFIG.SKIP = true;
+                    ctx.skip = true;
                     resolve(0);
                 } else {
                     resolve(0);
                 }
             } catch (error) {
-                $nobyda.AnError("获取任务列表", "WelfareTaskList", error, response, data);
+                markExecutionFailure(ctx);
+                $nobyda.AnError("获取任务列表", "WelfareTaskList", error, response, data, ctx);
                 resolve(0);
             }
         });
 
-        if (CONFIG.TIMEOUT) setTimeout(() => resolve(0), CONFIG.TIMEOUT);
+        if (CONFIG.TIMEOUT) timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            markExecutionFailure(ctx);
+            resolve(0);
+        }, CONFIG.TIMEOUT);
     });
 }
 
@@ -282,21 +304,26 @@ function getDrawPointsByDay() {
 /**
  * 获取用户福利积分并计算可抽奖次数
  */
-function getUserWelfarePoints() {
+function getUserWelfarePoints(ctx) {
+    const { merge } = ctx;
     return new Promise(resolve => {
+        let timeoutTimer;
+        let timedOut = false;
         // 检查是否需要跳过
-        if (shouldSkip()) {
+        if (shouldSkip(ctx)) {
             resolve(0);
             return;
         }
 
         $nobyda.get({
-            url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.USER_WELFARE_POINTS}?userId=${USER}`,
+            url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.USER_WELFARE_POINTS}?userId=${ctx.user}`,
             headers: {
-                token: KEY,
+                token: ctx.key,
                 ...DEFAULT_HEADERS
             }
         }, (error, response, data) => {
+            if (timedOut) return;
+            if (timeoutTimer) clearTimeout(timeoutTimer);
             try {
                 if (error) throw new Error(error);
                 const result = JSON.parse(data);
@@ -307,18 +334,23 @@ function getUserWelfarePoints() {
                     merge.DrawInfo = {points: Number(points) || 0, drawCount: Number(drawCount) || 0};
                     resolve(drawCount);
                 } else if (result.code === 2004) {
-                    CONFIG.SKIP = true;
+                    ctx.skip = true;
                     resolve(0);
                 } else {
                     resolve(0);
                 }
             } catch (error) {
-                $nobyda.AnError("获取用户福利积分", "UserWelfarePoints", error, response, data);
+                markExecutionFailure(ctx);
+                $nobyda.AnError("获取用户福利积分", "UserWelfarePoints", error, response, data, ctx);
                 resolve(0);
             }
         });
 
-        if (CONFIG.TIMEOUT) setTimeout(() => resolve(0), CONFIG.TIMEOUT);
+        if (CONFIG.TIMEOUT) timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            markExecutionFailure(ctx);
+            resolve(0);
+        }, CONFIG.TIMEOUT);
     });
 }
 
@@ -352,7 +384,8 @@ async function sendWxPusher(summary, content) {
     }
 }
 
-async function notify() {
+async function notify(ctx) {
+    const { merge } = ctx;
     try {
             let notifyLines = [];
 
@@ -365,7 +398,7 @@ async function notify() {
 
             // 1. 标题行：余额变化
             notifyLines.push('毛豆充任务完成');
-            notifyLines.push(`账号：${USER || '未知'}`);
+            notifyLines.push(`账号：${ctx.user || '未知'}`);
             notifyLines.push(`余额：${beforeMoney} -> ${afterMoney}${diffText}`);
 
             // 3. 签到结果
@@ -402,32 +435,48 @@ async function notify() {
             }
 
             // Token失效提示
-            if (shouldSkip()) {
+            if (shouldSkip(ctx)) {
                 notifyLines.unshift('⚠️ 检测到Token失效，已跳过后续操作');
             }
-        const content = notifyLines.join('\n');
+        const hasFailure = shouldSkip(ctx)
+            || merge.EXECUTION_FAILED
+            || merge.MaoDouUserInfo?.fail
+            || merge.MaoDouSign?.fail
+            || taskFail > 0
+            || drawFail > 0;
+        const content = hasFailure ? notifyLines.join('\n') : [
+            `账号：${ctx.user || '未知'}`,
+            `余额：${beforeMoney} -> ${afterMoney}${diffText}`,
+            `签到：${merge.MaoDouSign?.notify?.replace(/^毛豆充-签到/, '') || '成功'}`,
+            `任务：总${taskLimit}次，已成功${taskAlreadySuccess}次，本次执行${taskExecPlanned}次，成功${taskSuccess}次，失败${taskFail}次`,
+            `抽奖：总积分${totalPoints}，成功${drawSuccess}次，失败${drawFail}次`
+        ].join('\n');
+        const title = `毛豆充执行${hasFailure ? '失败' : '成功'}`;
         console.log(content);
         // $nobyda.notify('', '', content);
-        await sendWxPusher('毛豆充执行通知', content);
+        await sendWxPusher(title, content);
     } catch (error) {
         const content = error.message || JSON.stringify(error);
         // $nobyda.notify('通知模块 ' + error.name + '‼️', JSON.stringify(error), content);
-        await sendWxPusher('毛豆充执行通知', content);
+        await sendWxPusher('毛豆充执行失败', content);
     }
 }
 
 /**
  * 毛豆充签到
  */
-function MaoDouSign(delay) {
+function MaoDouSign(delay, ctx) {
+    const { merge } = ctx;
     merge.MaoDouSign = {};
     const today = new Date();
     const formattedDate = today.toISOString().split('T')[0];
     const points = getDrawPointsByDay(); // 获取当前日期所需的积分
 
     return new Promise(resolve => {
+        let timeoutTimer;
+        let timedOut = false;
         // 检查是否需要跳过
-        if (shouldSkip()) {
+        if (shouldSkip(ctx)) {
             resolve();
             return;
         }
@@ -436,24 +485,26 @@ function MaoDouSign(delay) {
             const signData = {
                 url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.SIGN}`,
                 headers: {
-                    token: KEY,
+                    token: ctx.key,
                     ...DEFAULT_HEADERS
                 },
                 body: JSON.stringify({
                     signDate: formattedDate,
                     points: points,
-                    userId: USER,
+                    userId: ctx.user,
                     consecutiveDays: 0
                 })
             };
 
             $nobyda.post(signData, (error, response, data) => {
+                if (timedOut) return;
+                if (timeoutTimer) clearTimeout(timeoutTimer);
                 try {
                     if (error) throw new Error(error);
 
                     const result = JSON.parse(data);
                     if (result.code === 2004) {
-                        CONFIG.SKIP = true;
+                        ctx.skip = true;
                         merge.MaoDouSign.notify = "毛豆充-签到失败, 原因: Token失效‼️";
                         merge.MaoDouSign.fail = 1;
                     } else if (result.code === 0) {
@@ -466,14 +517,19 @@ function MaoDouSign(delay) {
                         merge.MaoDouSign.fail = 1;
                     }
                 } catch (error) {
-                    $nobyda.AnError("毛豆充-签到", "MaoDouSign", error, response, data);
+                    markExecutionFailure(ctx);
+                    $nobyda.AnError("毛豆充-签到", "MaoDouSign", error, response, data, ctx);
                 } finally {
                     resolve();
                 }
             });
         }, delay);
 
-        if (CONFIG.TIMEOUT) setTimeout(resolve, CONFIG.TIMEOUT + delay);
+        if (CONFIG.TIMEOUT) timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            markExecutionFailure(ctx);
+            resolve();
+        }, CONFIG.TIMEOUT + delay);
     });
 }
 
@@ -487,14 +543,15 @@ function getRandomWaitTime(minTime = CONFIG.MIN_WAIT_TIME) {
 /**
  * 随机延迟任务执行
  */
-async function randomDelayTask(delay) {
+async function randomDelayTask(delay, ctx) {
+    const { merge } = ctx;
     // 检查是否需要跳过
-    if (shouldSkip()) {
+    if (shouldSkip(ctx)) {
         return;
     }
 
     // 获取任务列表并计算循环次数
-    const taskCount = await getWelfareTaskList();
+    const taskCount = await getWelfareTaskList(ctx);
 
     if (taskCount === 0) {
         return;
@@ -508,7 +565,7 @@ async function randomDelayTask(delay) {
     // 改为顺序执行，这样可以及时检测到任务完成状态
     for (let i = 0; i < taskCount; i++) {
         // 每次循环前检查是否需要跳过
-        if (shouldSkip()) {
+        if (shouldSkip(ctx)) {
             break;
         }
 
@@ -521,19 +578,22 @@ async function randomDelayTask(delay) {
         await new Promise(resolve => setTimeout(resolve, waitTime));
 
         // 等待当前任务完成
-        await MaoDouTask(delay, i);
+        await MaoDouTask(delay, i, ctx);
     }
 }
 
 /**
  * 毛豆充任务
  */
-function MaoDouTask(delay, index) {
+function MaoDouTask(delay, index, ctx) {
+    const { merge } = ctx;
     merge.MaoDouTask = merge.MaoDouTask || {success: 0, fail: 0};
 
     return new Promise(resolve => {
+        let timeoutTimer;
+        let timedOut = false;
         // 检查是否需要跳过
-        if (shouldSkip()) {
+        if (shouldSkip(ctx)) {
             resolve();
             return;
         }
@@ -542,14 +602,14 @@ function MaoDouTask(delay, index) {
             const taskData = {
                 url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.TASK}`,
                 headers: {
-                    token: KEY,
+                    token: ctx.key,
                     ...DEFAULT_HEADERS
                 },
                 body: JSON.stringify({
                     taskId: 1,
                     taskName: "观看视频",
                     points: 1000,
-                    userId: USER,
+                    userId: ctx.user,
                     status: 0,
                     drawType: 0,
                     reachTimes: index,
@@ -560,12 +620,14 @@ function MaoDouTask(delay, index) {
             };
 
             $nobyda.post(taskData, (error, response, data) => {
+                if (timedOut) return;
+                if (timeoutTimer) clearTimeout(timeoutTimer);
                 try {
                     if (error) throw new Error(error);
 
                     const result = JSON.parse(data);
                     if (result.code === 2004) {
-                        CONFIG.SKIP = true;
+                        ctx.skip = true;
                         merge.MaoDouTask.notify = "毛豆充-任务失败, 原因: Token失效‼️";
                         merge.MaoDouTask.fail = (merge.MaoDouTask.fail || 0) + 1;
                     } else if (result.code === 0) {
@@ -584,28 +646,34 @@ function MaoDouTask(delay, index) {
                         merge.MaoDouTask.failDetail = (merge.MaoDouTask.failDetail || []).concat(`任务${index}失败: ${result.msg || result.message || '未知错误'}`);
                     }
                 } catch (error) {
-                    $nobyda.AnError("毛豆充-任务", "MaoDouTask", error, response, data);
+                    markExecutionFailure(ctx);
+                    $nobyda.AnError("毛豆充-任务", "MaoDouTask", error, response, data, ctx);
                 } finally {
                     resolve();
                 }
             });
         }, delay);
 
-        if (CONFIG.TIMEOUT) setTimeout(resolve, CONFIG.TIMEOUT + delay);
+        if (CONFIG.TIMEOUT) timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            markExecutionFailure(ctx);
+            resolve();
+        }, CONFIG.TIMEOUT + delay);
     });
 }
 
 /**
- * 随机延迟抽奖执行
+ * 抽奖执行（固定在签到和任务之后）
  */
-async function randomDelayDraw(delay) {
+async function randomDelayDraw(delay, ctx) {
+    const { merge } = ctx;
     // 检查是否需要跳过
-    if (shouldSkip()) {
+    if (shouldSkip(ctx)) {
         return;
     }
 
     // 获取用户福利积分并计算可抽奖次数
-    const drawCount = await getUserWelfarePoints();
+    const drawCount = await getUserWelfarePoints(ctx);
 
     if (drawCount === 0) {
         return;
@@ -619,7 +687,7 @@ async function randomDelayDraw(delay) {
     // 改为顺序执行，这样可以及时检测到积分不足状态
     for (let i = 0; i < drawCount; i++) {
         // 每次循环前检查是否需要跳过
-        if (shouldSkip()) {
+        if (shouldSkip(ctx)) {
             break;
         }
 
@@ -632,19 +700,22 @@ async function randomDelayDraw(delay) {
         await new Promise(resolve => setTimeout(resolve, waitTime));
 
         // 等待当前抽奖完成
-        await MaoDouDraw(delay, i);
+        await MaoDouDraw(delay, i, ctx);
     }
 }
 
 /**
  * 毛豆充抽奖
  */
-function MaoDouDraw(delay, index) {
+function MaoDouDraw(delay, index, ctx) {
+    const { merge } = ctx;
     merge.MaoDouDraw = merge.MaoDouDraw || {success: 0, fail: 0};
 
     return new Promise(resolve => {
+        let timeoutTimer;
+        let timedOut = false;
         // 检查是否需要跳过
-        if (shouldSkip()) {
+        if (shouldSkip(ctx)) {
             resolve();
             return;
         }
@@ -653,18 +724,20 @@ function MaoDouDraw(delay, index) {
             const drawData = {
                 url: `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.DRAW}`,
                 headers: {
-                    token: KEY,
+                    token: ctx.key,
                     ...DEFAULT_HEADERS
                 }
             };
 
             $nobyda.post(drawData, (error, response, data) => {
+                if (timedOut) return;
+                if (timeoutTimer) clearTimeout(timeoutTimer);
                 try {
                     if (error) throw new Error(error);
 
                     const result = JSON.parse(data);
                     if (result.code === 2004) {
-                        CONFIG.SKIP = true;
+                        ctx.skip = true;
                         merge.MaoDouDraw.notify = "毛豆充-抽奖失败, 原因: Token失效‼️";
                         merge.MaoDouDraw.fail = (merge.MaoDouDraw.fail || 0) + 1;
                     } else if (result.code === 0) {
@@ -683,14 +756,19 @@ function MaoDouDraw(delay, index) {
                         merge.MaoDouDraw.failDetail = (merge.MaoDouDraw.failDetail || []).concat(`抽奖${index}失败: ${result.msg || result.message || '未知错误'}`);
                     }
                 } catch (error) {
-                    $nobyda.AnError("毛豆充-抽奖", "MaoDouDraw", error, response, data);
+                    markExecutionFailure(ctx);
+                    $nobyda.AnError("毛豆充-抽奖", "MaoDouDraw", error, response, data, ctx);
                 } finally {
                     resolve();
                 }
             });
         }, delay);
 
-        if (CONFIG.TIMEOUT) setTimeout(resolve, CONFIG.TIMEOUT + delay);
+        if (CONFIG.TIMEOUT) timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            markExecutionFailure(ctx);
+            resolve();
+        }, CONFIG.TIMEOUT + delay);
     });
 }
 
@@ -749,21 +827,10 @@ async function GetCookie() {
         if (userId && token) {
             // 读取已有Cookies并比较，避免重复写入
             let existed = {};
-            let migrated = false;
             try {
-                const store = loadTokenStore($nobyda.read('Cookies'));
-                existed = store.data;
-                migrated = store.migrated;
+                existed = loadTokenStore($nobyda.read('Cookies'));
             } catch (e) {
                 existed = {};
-            }
-
-            if (migrated) {
-                const migrateResult = $nobyda.write(JSON.stringify(existed, null, 2), 'Cookies');
-                console.log('旧格式Cookies已迁移: ' + JSON.stringify(existed));
-                if (!migrateResult) {
-                    // $nobyda.notify(`用户名: ${userId}`, '', `旧格式Cookies迁移失败，请检查存储状态`);
-                }
             }
 
             if (existed && existed[String(userId)] === token) {
@@ -780,7 +847,7 @@ async function GetCookie() {
                     `已保存: ${Object.keys(tokenData).length} 个账号`
                 ].join('\n');
                 // $nobyda.notify(`用户名: ${userId}`, '', content);
-                await sendWxPusher(`毛豆充获取用户 Token：${userId}`, content);
+                await sendWxPusher(writeResult ? '毛豆充获取用户成功' : '毛豆充获取用户失败', content);
             }
         } else {
             throw new Error(`Cookie中缺少信息,userID:${userId},token:${token}`);
@@ -788,7 +855,7 @@ async function GetCookie() {
     } catch (e) {
         const content = e?.message || String(e);
         // $nobyda.notify('GetCookie', '', content);
-        await sendWxPusher('毛豆充获取用户 Token 失败', content);
+        await sendWxPusher('毛豆充获取用户失败', content);
     }
 }
 
@@ -802,18 +869,9 @@ async function GetCookie() {
         if ($nobyda.isRequest) {
             await GetCookie();
         } else if (cookiesData) {
-            // 解析cookies数据，旧格式先迁移，新格式直接执行
             let cookies;
             try {
-                const store = loadTokenStore(cookiesData);
-                cookies = store.data;
-                if (store.migrated) {
-                    const migrateResult = $nobyda.write(JSON.stringify(cookies, null, 2), 'Cookies');
-                    console.log('旧格式Cookies已迁移: ' + JSON.stringify(cookies));
-                    if (!migrateResult) {
-                        throw new Error('旧格式Cookies迁移失败');
-                    }
-                }
+                cookies = loadTokenStore(cookiesData);
             } catch (error) {
                 console.error('解析Cookies数据失败:', error);
                 throw new Error('Cookie数据格式错误');
@@ -833,13 +891,14 @@ async function GetCookie() {
 
             const tokenEntries = shuffleEntries(Object.entries(cookies || {}));
             if (tokenEntries.length > 0) {
-                const initWaitMs = Wait($nobyda.read("InitDelay") || CONFIG.INIT_DELAY);
-                console.log('毛豆充 主流程将在 ' + initWaitMs + ' 毫秒后开始');
-                await new Promise(resolve => setTimeout(resolve, initWaitMs));
-                for (const [userId, token] of tokenEntries) {
-                    if (!token) continue;
-                    await all({ userId, token });
-                }
+                const initDelay = $nobyda.read("InitDelay") || CONFIG.INIT_DELAY;
+                await runWithConcurrency(tokenEntries, async ([userId, token]) => {
+                    if (!token) return Promise.resolve();
+                    const initWaitMs = Wait(initDelay);
+                    console.log(`毛豆充账号 ${userId} 将在 ${initWaitMs} 毫秒后开始`);
+                    await new Promise(resolve => setTimeout(resolve, initWaitMs));
+                    return all({ userId, token });
+                }, CONFIG.MAX_CONCURRENCY);
             } else {
                 throw new Error('Cookie中缺少可执行的token信息');
             }
@@ -1053,14 +1112,16 @@ function nobyda() {
         }
     };
 
-    const AnError = (name, keyname, error, resp, body) => {
-        if (typeof merge !== "undefined" && keyname) {
-            if (!merge[keyname].notify) {
-                merge[keyname].notify = `${name}: 异常, 已输出日志 ‼️`;
+    const AnError = (name, keyname, error, resp, body, context) => {
+        const targetMerge = context?.merge;
+        if (targetMerge && keyname) {
+            targetMerge[keyname] = targetMerge[keyname] || {};
+            if (!targetMerge[keyname].notify) {
+                targetMerge[keyname].notify = `${name}: 异常, 已输出日志 ‼️`;
             } else {
-                merge[keyname].notify += `\n${name}: 异常, 已输出日志 ‼️ (2)`;
+                targetMerge[keyname].notify += `\n${name}: 异常, 已输出日志 ‼️ (2)`;
             }
-            merge[keyname].error = 1;
+            targetMerge[keyname].error = 1;
         }
     };
 
