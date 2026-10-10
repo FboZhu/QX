@@ -41,7 +41,9 @@ const API_CONFIG = {
         DRAW_RESULTS: '/api/roulette_draw/draw_results'
     },
     // 抓包得到的 sign，若服务端按请求校验可改为按算法生成
-    SIGN: 'd7f1086401306ebdfd494b9be389c28c'
+    SIGN: 'eb215f633068ccc74e059401d2437623',
+    // 抽奖接口要求同时提交设备标识；也可在账号配置中覆盖
+    DEVICE_ID: 'ICB25M3YV034'
 };
 
 // 默认请求头(与小程序一致)，sign 由缓存或 API_CONFIG.SIGN 提供
@@ -49,8 +51,8 @@ const DEFAULT_HEADERS = {
     'Host': 'api.icitybox.cn',
     'accept': 'application/json, text/plain, */*',
     'xweb_xhr': '1',
-    'cb-mini-version': '8.1.49',
-    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Mac MacWechat/WMPF MacWechat/3.8.7(0x13080712) UnifiedPCMacWechat(0xf26415f0) XWEB/17078',
+    'cb-mini-version': '8.1.145',
+    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Mac MacWechat/WMPF MacWechat/3.8.7(0x13080712) UnifiedPCMacWechat(0xf2641d55) XWEB/25511',
     'channel': 'mini',
     'content-type': 'application/x-www-form-urlencoded',
     'platform-id': '1',
@@ -58,7 +60,7 @@ const DEFAULT_HEADERS = {
     'sec-fetch-site': 'cross-site',
     'sec-fetch-mode': 'cors',
     'sec-fetch-dest': 'empty',
-    'referer': 'https://servicewechat.com/wx8434e31068c20849/854/page-frame.html',
+    'referer': 'https://servicewechat.com/wx8434e31068c20849/931/page-frame.html',
     'accept-language': 'zh-CN,zh;q=0.9',
     'priority': 'u=1, i'
 };
@@ -266,7 +268,7 @@ function DrawResults(delay, clickNum, ctx) {
                     sign: ctx.sign,
                     ...DEFAULT_HEADERS
                 },
-                body: `click_num=${clickNum}`
+                body: `click_num=${clickNum}&device_id=${encodeURIComponent(ctx.deviceId)}`
             }, (error, response, data) => {
                 if (timedOut) return;
                 if (timeoutTimer) clearTimeout(timeoutTimer);
@@ -368,7 +370,14 @@ async function notify(ctx) {
  */
 async function all(cookie) {
     // 每个账号独立保存 token、跳过状态和执行结果，确保并行执行互不影响
-    const ctx = { key: cookie.token, user: cookie.userId || '', sign: cookie.sign || API_CONFIG.SIGN, merge: {}, skip: false };
+    const ctx = {
+        key: cookie.token,
+        user: cookie.userId || '',
+        sign: cookie.sign || API_CONFIG.SIGN,
+        deviceId: cookie.deviceId || API_CONFIG.DEVICE_ID,
+        merge: {},
+        skip: false
+    };
     try {
         const { merge } = ctx;
         $nobyda.num++;
@@ -495,7 +504,7 @@ async function GetCookie() {
                     const initWaitMs = Wait(initDelay);
                     console.log(`CityBox账号 ${userId} 将在 ${initWaitMs} 毫秒后开始`);
                     await wait(initWaitMs);
-                    return all({ userId, token: tokenValue.token, sign: tokenValue.sign });
+                    return all({ userId, token: tokenValue.token, sign: tokenValue.sign, deviceId: tokenValue.deviceId });
                 }, CONFIG.MAX_CONCURRENCY);
             } else {
                 throw new Error('Cookie 中缺少可执行的 token 信息');

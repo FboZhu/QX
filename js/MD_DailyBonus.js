@@ -35,6 +35,8 @@ const WX_PUSHER = {
 // API配置
 const API_CONFIG = {
     BASE_URL: 'https://apiv2.hichar.cn',
+    // userSign 按周一至周日循环使用的签到积分
+    SIGN_POINTS: [1000, 1100, 1200, 1300, 1400, 1800, 2500],
     ENDPOINTS: {
         USER_INFO: '/api/user/user/userInfo',
         SIGN: '/api/user/welfare/userSign',
@@ -51,12 +53,12 @@ const DEFAULT_HEADERS = {
     'accept': 'application/json',
     'xweb_xhr': '1',
     'appid': 'hichar.user.wxapp',
-    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Mac MacWechat/WMPF MacWechat/3.8.7(0x13080712) UnifiedPCMacWechat(0xf26406f0) XWEB/14304',
+    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Mac MacWechat/WMPF MacWechat/3.8.7(0x13080712) UnifiedPCMacWechat(0xf2641d55) XWEB/25511',
     'content-type': 'application/json',
     'sec-fetch-site': 'cross-site',
     'sec-fetch-mode': 'cors',
     'sec-fetch-dest': 'empty',
-    'referer': 'https://servicewechat.com/wxc7548b3f7181e9d9/356/page-frame.html',
+    'referer': 'https://servicewechat.com/wxc7548b3f7181e9d9/415/page-frame.html',
     'accept-language': 'zh-CN,zh;q=0.9',
     'priority': 'u=1, i'
 };
@@ -284,21 +286,9 @@ function getWelfareTaskList(ctx) {
  */
 function getDrawPointsByDay() {
     const today = new Date();
-    const dayOfWeek = today.getDay(); // 0是周日，1是周一，2是周二，...，6是周六
-
-    // 周一到周日的签到积分配置：1000, 1100, 1200, 1300, 1400, 1800, 2500
-    const pointsByDay = {
-        1: 1000, // 周一
-        2: 1100, // 周二
-        3: 1200, // 周三
-        4: 1300, // 周四
-        5: 1400, // 周五
-        6: 1800, // 周六
-        0: 2500  // 周日
-    };
-
-    const points = pointsByDay[dayOfWeek] || 1000; // 默认1000
-    return points;
+    const dayOfWeek = today.getDay(); // 0是周日，1是周一，...，6是周六
+    const mondayBasedIndex = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    return API_CONFIG.SIGN_POINTS[mondayBasedIndex] || API_CONFIG.SIGN_POINTS[0];
 }
 
 /**
@@ -384,6 +374,21 @@ async function sendWxPusher(summary, content) {
     }
 }
 
+// 聚合抽奖结果中的充电券（goodsType=3），按奖品名称统计数量
+function addDrawReward(merge, drawData) {
+    if (Number(drawData?.goodsType) !== 3) return;
+    const name = String(drawData.name || '未知充电券');
+    merge.MaoDouDraw.couponStats = merge.MaoDouDraw.couponStats || {};
+    merge.MaoDouDraw.couponStats[name] = (merge.MaoDouDraw.couponStats[name] || 0) + 1;
+}
+
+function getDrawCouponSummary(merge) {
+    const couponStats = merge.MaoDouDraw?.couponStats || {};
+    return Object.entries(couponStats)
+        .map(([name, count]) => `${name}*${count}`)
+        .join('，');
+}
+
 async function notify(ctx) {
     const { merge } = ctx;
     try {
@@ -419,7 +424,9 @@ async function notify(ctx) {
             const totalPoints = merge.DrawInfo?.points ?? 0;
             const drawSuccess = merge.MaoDouDraw?.success || 0;
             const drawFail = merge.MaoDouDraw?.fail || 0;
-            notifyLines.push(`抽奖：总积分${totalPoints}，成功${drawSuccess}次，失败${drawFail}次`);
+            const drawCouponSummary = getDrawCouponSummary(merge);
+            const drawSummary = `抽奖：总积分${totalPoints}，成功${drawSuccess}次，失败${drawFail}次${drawCouponSummary ? `，${drawCouponSummary}` : ''}`;
+            notifyLines.push(drawSummary);
 
             // 5. 失败详情（如有），逐行追加
             const failDetails = [];
@@ -449,7 +456,7 @@ async function notify(ctx) {
             `余额：${beforeMoney} -> ${afterMoney}${diffText}`,
             `签到：${merge.MaoDouSign?.notify?.replace(/^毛豆充-签到/, '') || '成功'}`,
             `任务：总${taskLimit}次，已成功${taskAlreadySuccess}次，本次执行${taskExecPlanned}次，成功${taskSuccess}次，失败${taskFail}次`,
-            `抽奖：总积分${totalPoints}，成功${drawSuccess}次，失败${drawFail}次`
+            drawSummary
         ].join('\n');
         const title = `毛豆充执行${hasFailure ? '失败' : '成功'}`;
         console.log(content);
@@ -469,7 +476,12 @@ function MaoDouSign(delay, ctx) {
     const { merge } = ctx;
     merge.MaoDouSign = {};
     const today = new Date();
-    const formattedDate = today.toISOString().split('T')[0];
+    // 使用本地日期，避免北京时间凌晨被 toISOString 转成前一天
+    const formattedDate = [
+        today.getFullYear(),
+        String(today.getMonth() + 1).padStart(2, '0'),
+        String(today.getDate()).padStart(2, '0')
+    ].join('-');
     const points = getDrawPointsByDay(); // 获取当前日期所需的积分
 
     return new Promise(resolve => {
@@ -491,7 +503,7 @@ function MaoDouSign(delay, ctx) {
                 body: JSON.stringify({
                     signDate: formattedDate,
                     points: points,
-                    userId: ctx.user,
+                    userId: Number(ctx.user),
                     consecutiveDays: 0
                 })
             };
@@ -726,7 +738,9 @@ function MaoDouDraw(delay, index, ctx) {
                 headers: {
                     token: ctx.key,
                     ...DEFAULT_HEADERS
-                }
+                },
+                // 抽奖接口要求提交 JSON 空对象
+                body: JSON.stringify({})
             };
 
             $nobyda.post(drawData, (error, response, data) => {
@@ -741,7 +755,9 @@ function MaoDouDraw(delay, index, ctx) {
                         merge.MaoDouDraw.notify = "毛豆充-抽奖失败, 原因: Token失效‼️";
                         merge.MaoDouDraw.fail = (merge.MaoDouDraw.fail || 0) + 1;
                     } else if (result.code === 0) {
-                        merge.MaoDouDraw.notify = `毛豆充-抽奖${index}成功`;
+                        const prize = result.data?.name || '成功';
+                        addDrawReward(merge, result.data);
+                        merge.MaoDouDraw.notify = `毛豆充-抽奖${index}${prize}`;
                         merge.MaoDouDraw.success = (merge.MaoDouDraw.success || 0) + 1;
                     } else if (result.code === -1) {
                         // 积分不足，跳过后续抽奖
