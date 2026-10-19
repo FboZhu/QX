@@ -26,10 +26,8 @@ const CONFIG = {
     SKIP: false
 };
 
-const WX_PUSHER = {
-    URL: 'https://wxpusher.zjiecode.com/api/send/message',
-    APP_TOKEN: 'AT_boG9xcxlPdixmvmDJYjuesBxH1OMpgLL',
-    UID: 'UID_BnvuCofAsHE7FWAuUNAOyVLwCTLk'
+const WECHAT_WEBHOOK = {
+    URL: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=7dd516b1-78c5-4c72-aa7b-bab8b1e68a9e'
 };
 
 // API配置
@@ -143,7 +141,7 @@ async function all(cookie) {
     } catch (error) {
         markExecutionFailure(ctx);
         $nobyda.AnError("主执行流程", "all", error, null, null, ctx);
-        await sendWxPusher('毛豆充执行失败', error?.message || String(error));
+        await sendWechatWebhook('毛豆充执行失败', error?.message || String(error));
     }
 }
 
@@ -345,32 +343,29 @@ function getUserWelfarePoints(ctx) {
 }
 
 /**
- * 通知函数
+ * 企业微信 webhook 通知
  */
-async function sendWxPusher(summary, content) {
+async function sendWechatWebhook(summary, content) {
     try {
         await new Promise(resolve => {
             $nobyda.post({
-                url: WX_PUSHER.URL,
+                url: WECHAT_WEBHOOK.URL,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    appToken: WX_PUSHER.APP_TOKEN,
-                    summary,
-                    content,
-                    contentType: 1,
-                    uids: [WX_PUSHER.UID],
-                    verifyPay: false,
-                    verifyPayType: 0
+                    msgtype: 'markdown',
+                    markdown: {
+                        content: `**${summary}**\n${content}`
+                    }
                 })
             }, (error, response, body) => {
                 if (error || !response || response.statusCode < 200 || response.statusCode >= 300) {
-                    console.log(`WxPusher 发送失败: ${error || body || '未知错误'}`);
+                    console.log(`企业微信发送失败: ${error || body || '未知错误'}`);
                 }
                 resolve();
             });
         });
     } catch (error) {
-        console.log(`WxPusher 发送异常: ${error.message || error}`);
+        console.log(`企业微信发送异常: ${error.message || error}`);
     }
 }
 
@@ -461,11 +456,11 @@ async function notify(ctx) {
         const title = `毛豆充执行${hasFailure ? '失败' : '成功'}`;
         console.log(content);
         // $nobyda.notify('', '', content);
-        await sendWxPusher(title, content);
+        await sendWechatWebhook(title, content);
     } catch (error) {
         const content = error.message || JSON.stringify(error);
         // $nobyda.notify('通知模块 ' + error.name + '‼️', JSON.stringify(error), content);
-        await sendWxPusher('毛豆充执行失败', content);
+        await sendWechatWebhook('毛豆充执行失败', content);
     }
 }
 
@@ -863,7 +858,7 @@ async function GetCookie() {
                     `已保存: ${Object.keys(tokenData).length} 个账号`
                 ].join('\n');
                 // $nobyda.notify(`用户名: ${userId}`, '', content);
-                await sendWxPusher(writeResult ? '毛豆充获取用户成功' : '毛豆充获取用户失败', content);
+                await sendWechatWebhook(writeResult ? '毛豆充获取用户成功' : '毛豆充获取用户失败', content);
             }
         } else {
             throw new Error(`Cookie中缺少信息,userID:${userId},token:${token}`);
@@ -871,7 +866,7 @@ async function GetCookie() {
     } catch (e) {
         const content = e?.message || String(e);
         // $nobyda.notify('GetCookie', '', content);
-        await sendWxPusher('毛豆充获取用户失败', content);
+        await sendWechatWebhook('毛豆充获取用户失败', content);
     }
 }
 
