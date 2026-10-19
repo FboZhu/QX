@@ -352,9 +352,9 @@ async function sendWechatWebhook(summary, content) {
                 url: WECHAT_WEBHOOK.URL,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    msgtype: 'markdown',
-                    markdown: {
-                        content: `**${summary}**\n${content}`
+                    msgtype: 'text',
+                    text: {
+                        content: `${summary}\n${content}`
                     }
                 })
             }, (error, response, body) => {
